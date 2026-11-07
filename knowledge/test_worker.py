@@ -89,7 +89,9 @@ class ReleaseOneTests(unittest.TestCase):
         import pymupdf
         doc=pymupdf.open()
         for i in range(8): doc.new_page().insert_text((40,80), f"Synthetic content on physical page {i+1}, enough text to avoid OCR.")
+        doc.set_toc([[1,"Synthetic chapter",4]])
         result=w.extract_pdf({"op":"pdf_window","data":base64.b64encode(doc.tobytes()).decode(),"startPage":4,"pageCount":2})
+        self.assertEqual(result["contents"][0]["page"],4)
         self.assertEqual(result["totalPages"],8)
         self.assertEqual([s["page"] for s in result["sections"]],[4,5])
 

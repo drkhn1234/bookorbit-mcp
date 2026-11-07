@@ -241,8 +241,8 @@ export class KnowledgeService {
     let sections: TextSection[];
     let total: number;
     let format: string;
-    let contents: unknown[] = [];
-    let contentsTruncated = false;
+    let contents: unknown[];
+    let contentsTruncated: boolean;
     if (book.files.some((f) => f.format.toLowerCase() === "epub")) {
       const parsed = await this.books.getParsedBook(bookId);
       contents = parsed.sections
