@@ -49,6 +49,7 @@ export class BookOrbitError extends Error {
     message: string,
     readonly status: number,
     readonly path: string,
+    readonly retryAfterMs?: number,
   ) {
     super(message);
     this.name = "BookOrbitError";
@@ -65,6 +66,9 @@ export class BookOrbitClient {
   private readonly fetchImpl: typeof fetch;
   private accessToken: string | null;
   private refreshCookie: string | null = null;
+  private authInFlight: Promise<boolean> | null = null;
+  private authRevision = 0;
+  private authFailure: { error: unknown; retryAt: number } | null = null;
 
   constructor(private readonly config: ClientConfig) {
     this.apiBase = `${config.baseUrl.replace(/\/+$/, "")}/api/v1`;
@@ -304,7 +308,7 @@ export class BookOrbitClient {
 
   /**
    * One curated dashboard book shelf (recently-added, want-to-read, up-next-in-
-   * series, …). `smart-scope` requires `smartScopeId`. Returns a bare book-card array.
+   * series, …). `smart-scope` requires `smartScopeId`. Normalizes old and new API responses.
    */
   async getBookShelf(
     type: BookShelfType,
@@ -314,9 +318,12 @@ export class BookOrbitClient {
     if (opts?.limit != null) params.set("limit", String(opts.limit));
     if (opts?.smartScopeId != null) params.set("smartScopeId", String(opts.smartScopeId));
     const qs = params.toString();
-    return this.getJson<BookListItem[]>(
-      `/dashboard/scrollers/${type}${qs ? `?${qs}` : ""}`,
-    );
+    const path = `/dashboard/scrollers/${type}${qs ? `?${qs}` : ""}`;
+    const result = await this.getJson<BookListItem[] | { books: BookListItem[] }>(path);
+    const books = Array.isArray(result) ? result : result?.books;
+    if (!Array.isArray(books))
+      throw new BookOrbitError("Invalid shelf response", 502, path);
+    return books;
   }
 
   /** One collection's detail (companion to getCollectionBooks). */
@@ -384,11 +391,14 @@ export class BookOrbitClient {
 
   /** Fetch with Bearer auth, refreshing / re-logging in once on a 401. */
   private async authFetch(path: string, init: RequestInit = {}): Promise<Response> {
-    if (!this.accessToken && this.canReauthenticate) await this.login();
+    // Share cold logins and wait for an ongoing refresh before sending requests.
+    if (this.authInFlight) await this.authInFlight;
+    if (!this.accessToken && this.canReauthenticate) await this.authenticate();
 
+    const revision = this.authRevision;
     let res = await this.rawFetch(path, init);
     if (res.status === 401 && (this.canReauthenticate || this.refreshCookie)) {
-      const recovered = await this.reauthenticate();
+      const recovered = await this.authenticate(revision);
       if (recovered) res = await this.rawFetch(path, init);
     }
 
@@ -405,14 +415,45 @@ export class BookOrbitClient {
     return this.fetchImpl(`${this.apiBase}${path}`, { ...init, headers });
   }
 
-  /** Try a token refresh, falling back to a full re-login. Returns success. */
+  /** One authentication attempt per client, including failures and delayed 401s. */
+  private async authenticate(failedRevision?: number): Promise<boolean> {
+    if (this.authInFlight) return this.authInFlight;
+    // Another request may have recovered while this request's 401 was in flight.
+    if (failedRevision != null && failedRevision !== this.authRevision) return true;
+    if (this.authFailure && Date.now() < this.authFailure.retryAt) {
+      throw this.authFailure.error;
+    }
+
+    const pending = this.reauthenticate();
+    this.authInFlight = pending;
+    try {
+      const recovered = await pending;
+      this.authFailure = null;
+      return recovered;
+    } catch (error) {
+      // Never turn an outage or invalid credentials into a tool-driven login storm.
+      const delay =
+        error instanceof BookOrbitError
+          ? (error.retryAfterMs ??
+            ([401, 403, 429].includes(error.status) ? 60_000 : 5_000))
+          : 5_000;
+      this.authFailure = { error, retryAt: Date.now() + delay };
+      throw error;
+    } finally {
+      this.authInFlight = null;
+    }
+  }
+
+  /** Refresh first; only rejected refresh credentials justify a full login. */
   private async reauthenticate(): Promise<boolean> {
     if (this.refreshCookie) {
       try {
         await this.refresh();
         return true;
-      } catch {
-        // fall through to full login
+      } catch (error) {
+        // 429, network failures and server errors must not trigger password login.
+        if (!(error instanceof BookOrbitError) || error.status !== 401) throw error;
+        this.refreshCookie = null;
       }
     }
     if (this.canReauthenticate) {
@@ -425,6 +466,7 @@ export class BookOrbitClient {
   private async login(): Promise<void> {
     const res = await this.fetchImpl(`${this.apiBase}/auth/login`, {
       method: "POST",
+      signal: AbortSignal.timeout(30_000),
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         username: this.config.username,
@@ -436,11 +478,10 @@ export class BookOrbitClient {
         `Login failed: ${await this.extractError(res)}`,
         res.status,
         "/auth/login",
+        this.retryAfter(res),
       );
     }
-    const body = (await res.json()) as { accessToken: string };
-    this.accessToken = body.accessToken;
-    this.captureRefreshCookie(res);
+    await this.acceptCredentials(res, true);
   }
 
   private async refresh(): Promise<void> {
@@ -448,14 +489,39 @@ export class BookOrbitClient {
     if (this.refreshCookie) headers.set("Cookie", `refresh_token=${this.refreshCookie}`);
     const res = await this.fetchImpl(`${this.apiBase}/auth/refresh`, {
       method: "POST",
+      signal: AbortSignal.timeout(30_000),
       headers,
     });
     if (!res.ok) {
-      throw new BookOrbitError("Token refresh failed", res.status, "/auth/refresh");
+      throw new BookOrbitError(
+        "Token refresh failed",
+        res.status,
+        "/auth/refresh",
+        this.retryAfter(res),
+      );
     }
-    const body = (await res.json()) as { accessToken: string };
+    await this.acceptCredentials(res, false);
+  }
+
+  private async acceptCredentials(res: Response, newSession: boolean): Promise<void> {
+    const body = (await res.json()) as { accessToken?: string };
+    if (typeof body.accessToken !== "string" || !body.accessToken.trim()) {
+      throw new BookOrbitError("Invalid authentication response", 502, "/auth");
+    }
     this.accessToken = body.accessToken;
+    if (newSession) this.refreshCookie = null;
     this.captureRefreshCookie(res);
+    this.authRevision++;
+  }
+
+  private retryAfter(res: Response): number | undefined {
+    const value = res.headers.get("retry-after");
+    if (!value) return undefined;
+    const seconds = Number(value);
+    const delay = Number.isFinite(seconds)
+      ? seconds * 1000
+      : Date.parse(value) - Date.now();
+    return Number.isFinite(delay) ? Math.max(1000, delay) : undefined;
   }
 
   private captureRefreshCookie(res: Response): void {
