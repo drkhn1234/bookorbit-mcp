@@ -1,3 +1,5 @@
+> BookOrbit reading/RAG and maintenance extensions: see [KNOWLEDGE.md](KNOWLEDGE.md), [RESULTS.md](RESULTS.md) and [CHECKPOINT.md](CHECKPOINT.md). Original upstream documentation follows.
+
 # bookorbit-mcp
 
 An [MCP](https://modelcontextprotocol.io) server that exposes the **text of your

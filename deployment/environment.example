@@ -1,0 +1,13 @@
+BOOKORBIT_EXTENSIONS=1
+AUTO_INDEX=1
+BOOKORBIT_URL=http://127.0.0.1:3000
+PUBLIC_URL=https://books.example.com
+OAUTH_DATA_DIR=/private/persistent/oauth
+CACHE_DIR=/private/persistent/bookorbit-mcp-cache
+KNOWLEDGE_DIR=/private/persistent/bookorbit-mcp-cache/knowledge
+KNOWLEDGE_PYTHON=/opt/bookorbit-mcp-runtime/.venv/bin/python
+EMBED_MODEL=BAAI/bge-small-en-v1.5
+EMBED_REVISION=1
+PDF_OCR=1
+OCR_LANGUAGES=eng
+HF_HUB_DISABLE_IMPLICIT_TOKEN=1
