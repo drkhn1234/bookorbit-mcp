@@ -377,7 +377,7 @@ test("semantic notes omit deleted, edited and revoked results even after ranking
       if (revoke) throw new BookOrbitError("Not found", 404, "/books/1");
       return book;
     },
-    async listAnnotations(opts: any) {
+    async listAnnotations(_opts: any) {
       return { items: ranked ? live : [initial], total: 1, pageSize: 100 };
     },
   } as unknown as BookOrbitClient;
