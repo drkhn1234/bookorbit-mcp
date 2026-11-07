@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import type { BookDetail } from "./types.js";
 import type { BookOrbitClient } from "./bookorbit-client.js";
 import type { BookCache } from "./cache.js";
 import { resolveSections } from "./epub-structure.js";
@@ -26,14 +28,16 @@ export class BookService {
 
   /** Get a parsed+measured book, building and caching it on first access. */
   async getParsedBook(bookId: number): Promise<ParsedBook> {
+    const book = await this.client.getBook(bookId);
+    const fingerprint = sourceFingerprint(book);
     const cached = await this.cache.readParsed(bookId);
-    if (cached) return cached;
+    if (cached?.sourceFingerprint === fingerprint) return cached;
 
     // De-duplicate concurrent builds of the same book.
     const existing = this.inflight.get(bookId);
     if (existing) return existing;
 
-    const build = this.buildParsedBook(bookId).finally(() =>
+    const build = this.buildParsedBook(bookId, fingerprint).finally(() =>
       this.inflight.delete(bookId),
     );
     this.inflight.set(bookId, build);
@@ -42,11 +46,25 @@ export class BookService {
 
   /** Extracted text of one section (rebuilds the book if the cache is cold). */
   async getSectionText(bookId: number, index: number): Promise<string> {
-    const cached = await this.cache.readSectionText(bookId, index);
-    if (cached != null) return cached;
     await this.getParsedBook(bookId);
     const text = await this.cache.readSectionText(bookId, index);
     return text ?? "";
+  }
+
+  /** Authorized bulk extraction avoids one HTTP lookup per section. */
+  async getTextSections(bookId: number) {
+    const parsed = await this.getParsedBook(bookId);
+    const sections = [];
+    for (const section of parsed.sections) {
+      sections.push({
+        index: section.index,
+        label: section.label,
+        text: (await this.cache.readSectionText(bookId, section.index)) ?? "",
+      });
+    }
+    if (sourceFingerprint(await this.client.getBook(bookId)) !== parsed.sourceFingerprint)
+      throw new Error("Book changed during extraction; retry");
+    return sections;
   }
 
   /** Case-insensitive keyword search across one book's cached section text. */
@@ -88,7 +106,10 @@ export class BookService {
 
   // --- build ---------------------------------------------------------------
 
-  private async buildParsedBook(bookId: number): Promise<ParsedBook> {
+  private async buildParsedBook(
+    bookId: number,
+    fingerprint: string,
+  ): Promise<ParsedBook> {
     const info = await this.client.getEpubInfo(bookId);
     const sections = resolveSections(info);
 
@@ -119,6 +140,7 @@ export class BookService {
 
     const parsed: ParsedBook = {
       bookId,
+      sourceFingerprint: fingerprint,
       title: info.metadata.title ?? "Unknown title",
       author: info.metadata.creator ?? "Unknown author",
       sections: measured,
@@ -145,4 +167,22 @@ function makeSnippet(text: string, at: number, matchLen: number): string {
   const prefix = start > 0 ? "…" : "";
   const suffix = end < text.length ? "…" : "";
   return `${prefix}${text.slice(start, end).replace(/\s+/g, " ").trim()}${suffix}`;
+}
+
+/** Includes library moves and file changes; upstream updatedAt is authoritative. */
+export function sourceFingerprint(book: BookDetail): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        book.id,
+        book.libraryId,
+        book.updatedAt,
+        book.title,
+        book.authors,
+        book.files
+          ?.map((f) => [f.id, f.format, f.sizeBytes])
+          .sort((a, b) => Number(a[0]) - Number(b[0])),
+      ]),
+    )
+    .digest("hex");
 }

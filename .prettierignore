@@ -1,3 +1,7 @@
 dist/
 node_modules/
 test/fixtures/
+
+.venv/
+runtime/
+knowledge/requirements.lock

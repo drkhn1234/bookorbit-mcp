@@ -25,6 +25,8 @@ export interface BookFile {
 
 /** Full book detail (GET /books/{id}) — only the fields we use are typed. */
 export interface BookDetail {
+  libraryId?: number;
+  updatedAt?: string | null;
   id: number;
   title: string;
   subtitle: string | null;
@@ -163,6 +165,8 @@ export interface RelatedBook {
  * "/books" endpoints. Only the fields we surface are typed.
  */
 export interface BookListItem {
+  libraryId?: number;
+  updatedAt?: string | null;
   id: number;
   status?: string | null;
   title: string;
@@ -423,6 +427,7 @@ export interface SectionWithSize extends Section {
 
 /** Parsed + measured book, as persisted in the cache. */
 export interface ParsedBook {
+  sourceFingerprint?: string;
   bookId: number;
   title: string;
   author: string;

@@ -25,6 +25,15 @@ const chapterXhtml = readFileSync(
 function stubClient(): { client: BookOrbitClient; fileFetches: string[] } {
   const fileFetches: string[] = [];
   const client = {
+    async getBook(id: number) {
+      return {
+        id,
+        title: "Sample Book",
+        authors: ["Test Author"],
+        files: [],
+        updatedAt: "stable",
+      };
+    },
     async getEpubInfo() {
       return info;
     },

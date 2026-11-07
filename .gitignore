@@ -4,3 +4,8 @@ dist/
 *.log
 .DS_Store
 /data/
+
+.venv/
+__pycache__/
+*.pyc
+/runtime/

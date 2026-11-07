@@ -87,7 +87,18 @@ export class BookOrbitClient {
   }
 
   async getBook(id: number): Promise<BookDetail> {
-    return this.getJson<BookDetail>(`/books/${id}`);
+    const book = await this.getJson<BookDetail>(`/books/${id}`);
+    // Browse returns names; deployed detail returns {id,name,...} entities.
+    const names = (values: unknown): string[] =>
+      Array.isArray(values)
+        ? values.map((value) => (typeof value === "string" ? value : String(value.name)))
+        : [];
+    return {
+      ...book,
+      authors: names(book.authors),
+      genres: names(book.genres),
+      tags: names(book.tags),
+    };
   }
 
   async getEpubInfo(bookId: number): Promise<EpubInfo> {
@@ -382,6 +393,139 @@ export class BookOrbitClient {
     return this.getJson<LibraryStats>(`/libraries/${libraryId}/stats`);
   }
 
+  /** Current authorized catalog, with stable pagination (never a search-limit sample). */
+  async queryBooks(
+    page = 0,
+    size = 100,
+    libraryId?: number,
+  ): Promise<{ items: BookListItem[]; total: number }> {
+    const path = libraryId == null ? "/books/query" : `/libraries/${libraryId}/books`;
+    return this.sendJson(path, "POST", {
+      pagination: { page, size },
+      sort: [{ field: "addedAt", dir: "asc" }],
+    });
+  }
+
+  async downloadFile(fileId: number, maxBytes = 80 * 1024 * 1024): Promise<Buffer> {
+    const res = await this.authFetch(`/books/files/${fileId}/download`, {
+      signal: AbortSignal.timeout(120_000),
+    });
+    if (Number(res.headers.get("content-length")) > maxBytes) {
+      await res.body?.cancel();
+      throw new Error("Book exceeds extraction download limit (80 MiB)");
+    }
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    const reader = res.body!.getReader();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.length;
+        if (size > maxBytes)
+          throw new Error("Book exceeds extraction download limit (80 MiB)");
+        chunks.push(value);
+      }
+    } finally {
+      await reader.cancel();
+    }
+    return Buffer.concat(chunks);
+  }
+
+  async searchBookMetadata(
+    title: string,
+    author?: string,
+    isbn?: string,
+  ): Promise<unknown[]> {
+    const params = new URLSearchParams({ title, resultsPerProvider: "3" });
+    if (author) params.set("author", author);
+    if (isbn) params.set("isbn", isbn);
+    const response = await this.authFetch(`/metadata-fetch/stream?${params}`, {
+      signal: AbortSignal.timeout(90_000),
+    });
+    return this.readSse(response);
+  }
+
+  async organizeBooks(libraryId: number, bookIds: number[]): Promise<unknown[]> {
+    const response = await this.authFetch(`/libraries/${libraryId}/bulk-rename/execute`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ includeBookIds: bookIds }),
+      signal: AbortSignal.timeout(180_000),
+    });
+    return this.readSse(response);
+  }
+
+  private async readSse(response: Response): Promise<unknown[]> {
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    const events: unknown[] = [];
+    let pending = "";
+    let bytes = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value.length;
+        if (bytes > 2 * 1024 * 1024)
+          throw new Error("Provider metadata response exceeded 2 MiB");
+        pending += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+        let end;
+        while ((end = pending.indexOf("\n\n")) >= 0) {
+          const frame = pending.slice(0, end);
+          pending = pending.slice(end + 2);
+          const raw = frame
+            .split("\n")
+            .filter((line) => line.startsWith("data:"))
+            .map((line) => line.slice(5).trimStart())
+            .join("\n");
+          if (raw) events.push(JSON.parse(raw));
+          if (events.length > 500)
+            throw new Error(
+              "Native operation exceeded 500 progress events; check its status before retrying",
+            );
+        }
+      }
+    } finally {
+      await reader.cancel();
+    }
+    return events;
+  }
+
+  async getLibrary(id: number): Promise<Library> {
+    return this.getJson(`/libraries/${id}`);
+  }
+  async updateLibrary(id: number, patch: unknown): Promise<Library> {
+    return this.sendJson(`/libraries/${id}`, "PATCH", patch);
+  }
+  async getFetchConfig(id: number): Promise<unknown> {
+    return this.getJson(`/book-metadata-fetch/config/libraries/${id}`);
+  }
+  async updateFetchConfig(id: number, config: unknown): Promise<unknown> {
+    return this.sendJson(`/book-metadata-fetch/config/libraries/${id}`, "PUT", config);
+  }
+  async fetchMetadata(id: number): Promise<unknown> {
+    return this.sendJson(`/book-metadata-fetch/run/${id}`, "POST", {});
+  }
+  async getFetchStatus(): Promise<unknown> {
+    return this.getJson("/book-metadata-fetch/status");
+  }
+  async previewRename(id: number): Promise<unknown> {
+    return this.getJson(`/libraries/${id}/bulk-rename/preview?pageSize=50`);
+  }
+  async updateMetadata(id: number, patch: unknown): Promise<unknown> {
+    return this.sendJson(`/books/${id}/metadata`, "PATCH", patch);
+  }
+
+  private async sendJson<T>(path: string, method: string, body: unknown): Promise<T> {
+    const res = await this.authFetch(path, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return res.status === 204 ? (undefined as T) : ((await res.json()) as T);
+  }
+
   // --- internals -----------------------------------------------------------
 
   private async getJson<T>(path: string): Promise<T> {
@@ -412,7 +556,11 @@ export class BookOrbitClient {
   private async rawFetch(path: string, init: RequestInit): Promise<Response> {
     const headers = new Headers(init.headers);
     if (this.accessToken) headers.set("Authorization", `Bearer ${this.accessToken}`);
-    return this.fetchImpl(`${this.apiBase}${path}`, { ...init, headers });
+    return this.fetchImpl(`${this.apiBase}${path}`, {
+      signal: AbortSignal.timeout(30_000),
+      ...init,
+      headers,
+    });
   }
 
   /** One authentication attempt per client, including failures and delayed 401s. */

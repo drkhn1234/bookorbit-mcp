@@ -49,6 +49,15 @@ function fakeServer() {
 
 function stubClient() {
   const client = {
+    async getBook(id: number) {
+      return {
+        id,
+        title: "Sample Book",
+        authors: ["Test Author"],
+        files: [],
+        updatedAt: "stable",
+      };
+    },
     async searchBooks(_q: string) {
       return [
         {

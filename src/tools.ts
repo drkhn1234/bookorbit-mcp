@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { registerExtendedTools } from "./extended-tools.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { BookOrbitClient } from "./bookorbit-client.js";
 import { BookOrbitError } from "./bookorbit-client.js";
@@ -112,6 +113,8 @@ export function registerTools(
   client: BookOrbitClient,
   service: BookService,
 ): void {
+  if (process.env.BOOKORBIT_EXTENSIONS === "1")
+    registerExtendedTools(server, client, service);
   server.registerTool(
     "search_books",
     {
