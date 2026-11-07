@@ -83,5 +83,36 @@ class KnowledgeTests(unittest.TestCase):
         self.assertEqual(w.conn.execute("SELECT fingerprint FROM sources WHERE book_id=1").fetchone()[0], "a" * 64)
 
 
+
+class ReleaseOneTests(unittest.TestCase):
+    def test_pdf_window_only_returns_requested_pages(self):
+        import pymupdf
+        doc=pymupdf.open()
+        for i in range(8): doc.new_page().insert_text((40,80), f"Synthetic content on physical page {i+1}, enough text to avoid OCR.")
+        result=w.extract_pdf({"op":"pdf_window","data":base64.b64encode(doc.tobytes()).decode(),"startPage":4,"pageCount":2})
+        self.assertEqual(result["totalPages"],8)
+        self.assertEqual([s["page"] for s in result["sections"]],[4,5])
+
+    def test_persistent_job_pause_retry_and_failure(self):
+        w.dispatch({"op":"job_control","bookId":99,"action":"queue","priority":80})
+        w.dispatch({"op":"job_control","bookId":99,"action":"pause"})
+        with self.assertRaises(ValueError):
+            w.index({"bookId":99,"fingerprint":"9"*64,"sections":[{"index":0,"label":"test","text":"Synthetic page text"}]})
+        job=next(j for j in w.dispatch({"op":"jobs"}) if j["book_id"]==99)
+        self.assertEqual(job["state"],"paused")
+        w.dispatch({"op":"job_control","bookId":99,"action":"resume","priority":90})
+        w.dispatch({"op":"job_control","bookId":99,"action":"failed","error":"Test failure"})
+        job=next(j for j in w.dispatch({"op":"jobs"}) if j["book_id"]==99)
+        self.assertEqual(job["error"],"Test failure")
+        self.assertGreater(job["retry_at"],0)
+        w.dispatch({"op":"job_control","bookId":99,"action":"retry","priority":100})
+        self.assertEqual(next(j for j in w.dispatch({"op":"jobs"}) if j["book_id"]==99)["retry_at"],0)
+
+    def test_unrelated_programming_fields_are_not_physics_evidence(self):
+        w.index({"bookId":88,"fingerprint":"8"*64,"sections":[{"index":0,"label":"Classes","text":"A class field stores a variable in an object. Programming languages provide methods and class fields."}]})
+        allowed=[{"bookId":88,"fingerprint":"8"*64}]
+        self.assertEqual(w.search({"query":"electromagnetism Maxwell magnetic fields","allowed":allowed}),[])
+        self.assertTrue(w.search({"query":"class variables","allowed":allowed,"mode":"lexical"}))
+
 if __name__ == "__main__":
     unittest.main()

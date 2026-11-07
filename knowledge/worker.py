@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import sqlite3
 import sys
+import time
 
 os.umask(0o077)
 os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
@@ -27,6 +28,8 @@ conn = sqlite3.connect(DBROOT / "sources.sqlite3")
 conn.execute("CREATE TABLE IF NOT EXISTS sources(book_id INTEGER PRIMARY KEY, fingerprint TEXT, chunks INTEGER)")
 conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS passages USING fts5(id UNINDEXED,book_id UNINDEXED,fingerprint UNINDEXED,text)")
 conn.execute("CREATE TABLE IF NOT EXISTS staged(id TEXT PRIMARY KEY, book_id INTEGER, vector TEXT)")
+conn.execute("PRAGMA journal_mode=WAL")
+conn.execute("CREATE TABLE IF NOT EXISTS jobs(book_id INTEGER PRIMARY KEY, fingerprint TEXT, state TEXT, priority INTEGER DEFAULT 0, total INTEGER DEFAULT 0, completed INTEGER DEFAULT 0, error TEXT, updated REAL, retry_at REAL DEFAULT 0, embedding_seconds REAL DEFAULT 0)")
 engine = None
 vectors = None
 
@@ -66,7 +69,13 @@ def extract_pdf(data):
         if len(doc) > 2000:
             raise ValueError("PDF exceeds 2000-page extraction limit")
         chars = 0
-        for index, page in enumerate(doc):
+        start = max(0, int(data.get("startPage", 1)) - 1)
+        stop = min(len(doc), start + int(data.get("pageCount", 5))) if data.get("op") == "pdf_window" else len(doc)
+        if start >= len(doc): raise ValueError("Page outside PDF")
+        total_pages = len(doc)
+        outline = doc.get_toc()
+        for index in range(start, stop):
+            page = doc[index]
             text = page.get_text(sort=True)
             if len(text.strip()) < 30:
                 if os.environ.get("PDF_OCR", "1") == "1":
@@ -82,7 +91,7 @@ def extract_pdf(data):
             if chars > 25_000_000:
                 raise ValueError("PDF exceeds 25 million extracted characters")
             sections.append({"index": index, "label": f"Page {index + 1}", "page": index + 1, "text": text})
-    return {"sections": sections, "ocrPages": ocr_pages, "unreadablePages": unavailable,
+    return {"contents": [{"level":r[0],"title":r[1],"page":r[2]} for r in outline[:200]], "contentsTruncated":len(outline)>200,"totalPages": total_pages, "sections": sections, "ocrPages": ocr_pages, "unreadablePages": unavailable,
             "sha256": hashlib.sha256(raw).hexdigest()}
 
 
@@ -112,20 +121,32 @@ def index(data):
     rows = chunks(data)
     if not rows:
         raise ValueError("No extractable text; scanned pages may require OCR")
+    with conn:
+        conn.execute("INSERT OR IGNORE INTO jobs(book_id,fingerprint,state,updated) VALUES(?,?,?,?)", (book_id,data["fingerprint"],"queued",time.time()))
+        job = conn.execute("SELECT state,fingerprint FROM jobs WHERE book_id=?", (book_id,)).fetchone()
+        if job[0] == "paused": raise ValueError("Indexing paused")
+        conn.execute("UPDATE jobs SET fingerprint=?,state='running',total=?,updated=?,error=NULL WHERE book_id=?", (data["fingerprint"],len(rows),time.time(),book_id))
     # Durable per-chunk progress lets large books resume after interruption.
     existing = dict(conn.execute("SELECT id, vector FROM staged WHERE book_id=?", (book_id,)))
     for row in rows:
         if row["id"] in existing:
             row["vector"] = json.loads(existing[row["id"]])
     pending = [r for r in rows if "vector" not in r]
+    with conn:
+        conn.execute("UPDATE jobs SET completed=? WHERE book_id=?", (len(rows)-len(pending),book_id))
     print(f"[Knowledge] indexing book={book_id} passages={len(rows)}", file=sys.stderr, flush=True)
     for start in range(0, len(pending), 4):
+        if conn.execute("SELECT state FROM jobs WHERE book_id=?", (book_id,)).fetchone()[0] == "paused":
+            raise ValueError("Indexing paused")
         batch = pending[start:start + 4]
+        began = time.monotonic()
         embeddings = list(model().embed([r["text"] for r in batch]))
         for row, vector in zip(batch, embeddings, strict=True):
             row["vector"] = vector.tolist()
         with conn:
             conn.executemany("INSERT OR REPLACE INTO staged VALUES(?,?,?)", [(r["id"], book_id, json.dumps(r["vector"])) for r in batch])
+            conn.execute("UPDATE jobs SET completed=?,embedding_seconds=embedding_seconds+?,updated=? WHERE book_id=?", (len(rows)-len(pending)+start+len(batch),time.monotonic()-began,time.time(),book_id))
+    if conn.execute("SELECT state FROM jobs WHERE book_id=?", (book_id,)).fetchone()[0] == "paused": raise ValueError("Indexing paused")
     db = store()
     tbl = table()
     if tbl is None:
@@ -138,6 +159,7 @@ def index(data):
         conn.executemany("INSERT INTO passages VALUES(?,?,?,?)", [(r["id"], book_id, r["fingerprint"], r["text"]) for r in rows])
         conn.execute("INSERT OR REPLACE INTO sources VALUES(?,?,?)", (book_id, data["fingerprint"], len(rows)))
         conn.execute("DELETE FROM staged WHERE book_id=?", (book_id,))
+        conn.execute("UPDATE jobs SET state='complete',completed=total,error=NULL,updated=? WHERE book_id=?", (time.time(),book_id))
     return {"bookId": book_id, "passages": len(rows)}
 
 
@@ -160,7 +182,8 @@ def search(data):
     if mode != "lexical":
         vector = next(model().embed([data["query"]])).tolist()
         semantic = tbl.search(vector).distance_type("cosine").where(where, prefilter=True).limit(100).to_list()
-    tokens = re.findall(r"\w+", data["query"], re.UNICODE)[:32]
+    ignored = set("the a an of to in and or how what why does do is are about explain explaining find passages books my across with from fields field".split())
+    tokens = [t for t in re.findall(r"\w+", data["query"].lower(), re.UNICODE) if t not in ignored and len(t)>2][:32]
     if mode != "semantic" and tokens:
         expr = " OR ".join('"' + t + '"' for t in tokens)
         valid = {(bid, fp) for bid, fp in allowed}
@@ -173,18 +196,45 @@ def search(data):
             id_filter = "id IN (" + ",".join(f"'{i}'" for i in ids) + ")"
             by_id = {r["id"]: r for r in tbl.search().where(f"({where}) AND {id_filter}").limit(100).to_list()}
             lexical = [by_id[i] for i in ids if i in by_id]
+    similarities = {r["id"]: 1-float(r.get("_distance",1)) for r in semantic}
+    lexical_ids = {r["id"] for r in lexical}
     ranked = {}
     for group in (semantic, lexical):
         for position, row in enumerate(group):
             key = row["id"]
             current = ranked.setdefault(key, {**{k: v for k, v in row.items() if k not in ("vector", "_distance")}, "score": 0})
+            current["semanticSimilarity"] = similarities.get(key)
+            current["lexicalMatch"] = key in lexical_ids
             current["score"] += 1 / (60 + position + 1)
-    return sorted(ranked.values(), key=lambda r: (-r["score"], r["id"]))[:int(data.get("limit", 10))]
+    return sorted([r for r in ranked.values() if r["lexicalMatch"] or (r["semanticSimilarity"] or 0) >= float(os.environ.get("MIN_SEMANTIC_SIMILARITY", "0.65"))], key=lambda r: (-r["score"], r["id"]))[:int(data.get("limit", 10))]
 
 
 def dispatch(data):
     op = data["op"]
-    if op == "pdf":
+    if op == "jobs":
+        names = [r[1] for r in conn.execute("PRAGMA table_info(jobs)")]
+        return [dict(zip(names,row)) for row in conn.execute("SELECT * FROM jobs")]
+    if op == "job_control":
+        bid = int(data["bookId"])
+        action = data["action"]
+        with conn:
+            conn.execute("INSERT OR IGNORE INTO jobs(book_id,state,updated) VALUES(?,'queued',?)", (bid,time.time()))
+            if action == "pause": conn.execute("UPDATE jobs SET state='paused',updated=? WHERE book_id=?", (time.time(),bid))
+            elif action in ("queue","resume","retry"):
+                conn.execute("UPDATE jobs SET state=CASE WHEN state='running' THEN state ELSE 'queued' END,priority=?,retry_at=0,error=NULL,updated=? WHERE book_id=?", (int(data.get("priority",100)),time.time(),bid))
+                active = conn.execute("SELECT fingerprint,chunks FROM sources WHERE book_id=?", (bid,)).fetchone()
+                if active and active[0] == data.get("fingerprint"):
+                    conn.execute("UPDATE jobs SET state='complete',completed=?,total=? WHERE book_id=?", (active[1],active[1],bid))
+            elif action == "complete":
+                conn.execute("UPDATE jobs SET state='complete',total=?,completed=?,error=NULL,updated=? WHERE book_id=?", (int(data["passages"]),int(data["passages"]),time.time(),bid))
+            elif action == "start":
+                if conn.execute("SELECT state FROM jobs WHERE book_id=?", (bid,)).fetchone()[0] == "paused": raise ValueError("Indexing paused")
+                conn.execute("UPDATE jobs SET state='extracting',updated=? WHERE book_id=?", (time.time(),bid))
+            elif action == "failed":
+                conn.execute("UPDATE jobs SET state='failed',error=?,retry_at=?,updated=? WHERE book_id=? AND state!='paused'", (str(data.get("error","Indexing failed"))[:200],time.time()+900,time.time(),bid))
+            else: raise ValueError("Unknown job action")
+        return {"bookId":bid,"action":action}
+    if op in ("pdf", "pdf_window"):
         return extract_pdf(data)
     if op == "index":
         with (DBROOT / "writer.lock").open("a") as lock:

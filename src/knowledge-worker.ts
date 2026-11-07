@@ -55,7 +55,7 @@ export class KnowledgeWorker {
         this.pending = undefined;
         reject(
           new Error(
-            "Indexing operation exceeded 5 minutes; reduce book size or enable a faster embedding provider",
+            "Knowledge operation timed out; completed index batches are retained. Retry or inspect job status.",
           ),
         );
       }, this.timeoutMs);

@@ -4,11 +4,10 @@ import { join } from "node:path";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { BookOrbitClient } from "./bookorbit-client.js";
-import type { BookService } from "./book-service.js";
-import { indexingWorker } from "./knowledge-worker.js";
+import { sourceFingerprint, type BookService } from "./book-service.js";
+import { indexingWorker, knowledgeWorker } from "./knowledge-worker.js";
 import { KnowledgeService } from "./knowledge-service.js";
 
-const indexJobs = new Map<number, Promise<unknown>>();
 const id = z.number().int().positive();
 const readOnly = { readOnlyHint: true, destructiveHint: false, openWorldHint: false };
 const result = (data: unknown) => ({
@@ -33,6 +32,60 @@ export function registerExtendedTools(
     client,
     books,
     process.env.CACHE_DIR ?? join(homedir(), ".cache", "bookorbit-mcp"),
+  );
+  server.registerTool(
+    "inspect_book",
+    {
+      description:
+        "Inspect a bounded window of an authorized EPUB or PDF even before semantic indexing. start is a 1-based EPUB section or PDF page, count at most 5. Returns source locations, optional query-centered excerpts and nextStart. This is not full-book search; use list_chapters for EPUB navigation. Set prioritize=true to queue durable priority indexing.",
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      inputSchema: {
+        bookId: id,
+        start: id.default(1),
+        count: id.max(5).default(3),
+        query: z.string().max(1000).default(""),
+        prioritize: z.boolean().default(false),
+      },
+    },
+    async ({ bookId, start, count, query, prioritize }) =>
+      guard(async () => {
+        const inspected = await knowledge.inspect(bookId, start, count, query);
+        if (prioritize)
+          await knowledgeWorker.request({
+            op: "job_control",
+            fingerprint: sourceFingerprint(await client.getBook(bookId)),
+            bookId,
+            action: "queue",
+            priority: 100,
+          });
+        return { ...inspected, indexingPrioritized: prioritize };
+      }),
+  );
+  server.registerTool(
+    "control_indexing",
+    {
+      description:
+        "Manage a durable per-book index job: pause at next embedding batch, resume, retry, or prioritize. Requires native metadata-management permission plus current book access. Controls affect the shared derived job for that book; never change original content. Progress/errors are in get_index_status. Priority applies after the current book yields.",
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      inputSchema: {
+        bookId: id,
+        action: z.enum(["pause", "resume", "retry", "prioritize"]),
+        priority: z.number().int().min(0).max(100).default(100),
+      },
+    },
+    async ({ bookId, action, priority }) =>
+      guard(async () => {
+        const book = await client.getBook(bookId);
+        if (book.libraryId == null) throw new Error("Missing library identity");
+        await client.getFetchConfig(book.libraryId);
+        return knowledgeWorker.request({
+          op: "job_control",
+          bookId,
+          fingerprint: sourceFingerprint(book),
+          action: action === "prioritize" ? "queue" : action,
+          priority,
+        });
+      }),
   );
   server.registerTool(
     "list_books",
@@ -158,26 +211,23 @@ export function registerExtendedTools(
       guard(async () => {
         const ids = bookIds ?? (await knowledge.status()).pending.slice(0, 5);
         for (const bookId of ids) await client.getBook(bookId);
-        if (indexJobs.size + ids.filter((id) => !indexJobs.has(id)).length > 100)
-          throw new Error("Index queue full; wait for pending jobs");
+        for (const bookId of ids)
+          await knowledgeWorker.request({
+            op: "job_control",
+            fingerprint: sourceFingerprint(await client.getBook(bookId)),
+            bookId,
+            action: "queue",
+            priority: 100,
+          });
         const background = new KnowledgeService(
           client,
           books,
           process.env.CACHE_DIR ?? join(homedir(), ".cache", "bookorbit-mcp"),
           indexingWorker,
         );
-        for (const bookId of ids) {
-          if (indexJobs.has(bookId)) continue;
-          const job = background
-            .indexBook(bookId)
-            .catch(() => {
-              console.error(
-                `[Index] explicit job failed book=${bookId}; retry with index_books to resume`,
-              );
-            })
-            .finally(() => indexJobs.delete(bookId));
-          indexJobs.set(bookId, job);
-        }
+        void (async () => {
+          for (let n = 0; n < ids.length; n++) await background.indexPending(1, ids);
+        })().catch(() => console.error("[Index] scheduler retry required"));
         return {
           queued: ids,
           note: "Indexing runs in the background. Use get_index_status; completed embedding batches survive interruption.",

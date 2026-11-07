@@ -71,6 +71,7 @@ test("retrieval prefilters user catalog and rechecks permission after vector res
   } as unknown as BookOrbitClient;
   const worker = {
     async request(data: any): Promise<any> {
+      if (data.op === "jobs") return [];
       if (data.op === "status")
         return { model: "test", revision: "1", indexIdentity: "x", sources: [] };
       assert.deepEqual(data.allowed, [
@@ -151,7 +152,7 @@ test("actual MCP initializes, discovers extensions and previews/applies native a
   await client.connect(b);
   try {
     const tools = await client.listTools();
-    assert.equal(tools.tools.length, 9);
+    assert.equal(tools.tools.length, 11);
     const invoke = async (args: any) =>
       client.callTool({ name: "library_maintenance", arguments: args });
     const preview = await invoke({
@@ -246,4 +247,37 @@ test("native provider metadata stream is decoded without applying metadata", asy
   const events = await native.searchBookMetadata("Synthetic");
   assert.equal(events.length, 2);
   assert.ok(paths[0].includes("/metadata-fetch/stream?title=Synthetic"));
+});
+
+test("book metadata ranking favors physics over programming without excluding other books", async () => {
+  const { metadataScore } = await import("../src/retrieval-ranking.js");
+  const query = "electromagnetism and magnetic fields";
+  assert.ok(
+    metadataScore(query, { title: "Introduction to Electrodynamics" }) >
+      metadataScore(query, { title: "Programming class fields" }),
+  );
+});
+
+test("bounded pending-book inspection rechecks permission after extracting text", async () => {
+  let allowed = true;
+  const native = {
+    async getBook() {
+      if (!allowed) throw new BookOrbitError("Not found", 404, "/books/1");
+      return book;
+    },
+    async downloadFile() {
+      return Buffer.from("pdf");
+    },
+  } as unknown as BookOrbitClient;
+  const worker = {
+    async request(): Promise<any> {
+      allowed = false;
+      return {
+        sections: [{ index: 0, page: 1, label: "Page 1", text: "PRIVATE" }],
+        totalPages: 20,
+      };
+    },
+  };
+  const service = new KnowledgeService(native, {} as BookService, tmpdir(), worker);
+  await assert.rejects(service.inspect(1, 1, 2), /Not found/);
 });
