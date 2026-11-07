@@ -1,4 +1,4 @@
-> BookOrbit reading/RAG and maintenance extensions: see [KNOWLEDGE.md](KNOWLEDGE.md), [RESULTS.md](RESULTS.md) and [CHECKPOINT.md](CHECKPOINT.md). Original upstream documentation follows.
+> BookOrbit reading/RAG and maintenance extensions: Release 2 is deployed; see [RELEASE2.md](RELEASE2.md), [KNOWLEDGE.md](KNOWLEDGE.md), [RESULTS.md](RESULTS.md) and [CHECKPOINT.md](CHECKPOINT.md). Original upstream documentation follows.
 
 # bookorbit-mcp
 
