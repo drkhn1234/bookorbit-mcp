@@ -136,6 +136,21 @@ class ReleaseTwoTests(unittest.TestCase):
         w.index({**data,"fingerprint":"d"*64})
         with self.assertRaises(ValueError): w.dispatch(args)
 
+    def test_source_version_refresh_reuses_only_exact_same_book_text(self):
+        from unittest.mock import patch
+        data={"bookId":94,"fingerprint":"a"*64,"sections":[{"index":0,"label":"Synthetic","text":"Neurons send chemical and electrical signals across synapses."}]}
+        w.index(data)
+        with patch.object(w,"model",side_effect=AssertionError("Unchanged text was embedded again")):
+            result=w.index({**data,"fingerprint":"b"*64})
+        self.assertEqual(result["reusedPassages"],1)
+        self.assertEqual(w.conn.execute("SELECT fingerprint FROM sources WHERE book_id=94").fetchone()[0],"b"*64)
+        # Same text in another book must not borrow this book's vector cache.
+        with patch.object(w,"model",side_effect=ValueError("needs new embeddings")):
+            with self.assertRaises(ValueError): w.index({**data,"bookId":95})
+        # Changed text in the same book must also be embedded afresh.
+        with patch.object(w,"model",side_effect=ValueError("needs new embeddings")):
+            with self.assertRaises(ValueError): w.index({**data,"fingerprint":"c"*64,"sections":[{"index":0,"label":"New","text":"A different text about bread and yeast."}]})
+
     def test_semantic_notes_use_only_current_session_snapshot(self):
         a = "a"*8+"-"+"a"*4+"-"+"a"*4+"-"+"a"*4+"-"+"a"*12
         b = a.replace("a","b")

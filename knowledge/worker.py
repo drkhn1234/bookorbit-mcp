@@ -132,6 +132,17 @@ def index(data):
     for row in rows:
         if row["id"] in existing:
             row["vector"] = json.loads(existing[row["id"]])
+    # A native metadata update changes the source version, but unchanged passage
+    # text must not force another whole-book embedding run. Reuse vectors only
+    # from this same book/model index and exact text checksums, never old text.
+    reused = 0
+    previous = table()
+    if previous is not None:
+        old_vectors = {r["sha256"]:r["vector"] for r in previous.search().select(["sha256","vector"]).where(f"book_id={book_id}").limit(25_000).to_list()}
+        for row in rows:
+            if "vector" not in row and row["sha256"] in old_vectors:
+                row["vector"] = old_vectors[row["sha256"]]
+                reused += 1
     pending = [r for r in rows if "vector" not in r]
     with conn:
         conn.execute("UPDATE jobs SET completed=? WHERE book_id=?", (len(rows)-len(pending),book_id))
@@ -161,7 +172,7 @@ def index(data):
         conn.execute("INSERT OR REPLACE INTO sources VALUES(?,?,?)", (book_id, data["fingerprint"], len(rows)))
         conn.execute("DELETE FROM staged WHERE book_id=?", (book_id,))
         conn.execute("UPDATE jobs SET state='complete',completed=total,error=NULL,updated=? WHERE book_id=?", (time.time(),book_id))
-    return {"bookId": book_id, "passages": len(rows)}
+    return {"bookId": book_id, "passages": len(rows), "reusedPassages": reused}
 
 
 def search(data):
