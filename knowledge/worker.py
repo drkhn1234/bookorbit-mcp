@@ -3,6 +3,7 @@
 Only its parent supplies authorized documents/candidate fingerprints. Originals
 are never modified. Indexes can be deleted and rebuilt. stdout is protocol only.
 """
+from collections import OrderedDict
 import base64
 import fcntl
 import hashlib
@@ -209,8 +210,74 @@ def search(data):
     return sorted([r for r in ranked.values() if r["lexicalMatch"] or (r["semanticSimilarity"] or 0) >= float(os.environ.get("MIN_SEMANTIC_SIMILARITY", "0.65"))], key=lambda r: (-r["score"], r["id"]))[:int(data.get("limit", 10))]
 
 
+# Session-local embedding vectors only. Authoritative note text always arrives
+# from a fresh own-user API snapshot; never inserted in the book Lance/FTS store.
+note_vectors = OrderedDict()
+
+def search_notes(data):
+    namespace = data["namespace"]
+    if not re.fullmatch(r"[a-f0-9-]{36}", namespace): raise ValueError("Invalid note namespace")
+    items = data["items"]
+    if len(items) > 500: raise ValueError("Annotation snapshot exceeds 500 notes")
+    mode = data.get("mode", "hybrid")
+    query = data["query"]
+    import numpy as np
+    q = None
+    if mode != "lexical" and items:
+        q = np.asarray(next(model().embed([query])), dtype=float)
+        for row in items:
+            if (namespace,row["version"]) in note_vectors: note_vectors.move_to_end((namespace,row["version"]))
+        pending = [r for r in items if (namespace,r["version"]) not in note_vectors]
+        for start in range(0,len(pending),4):
+            batch = pending[start:start+4]
+            for row,vector in zip(batch,model().embed([r["text"][:4000] for r in batch]),strict=True):
+                note_vectors[(namespace,row["version"])] = np.asarray(vector, dtype=float)
+        while len(note_vectors)>4096: note_vectors.popitem(last=False)
+    tokens = set(re.findall(r"\w+",query.lower())) - set("how do does the a an of and to in my notes about are is".split())
+    rows = []
+    for row in items:
+        similarity = None
+        if q is not None:
+            key = (namespace,row["version"])
+            vector = note_vectors[key]
+            note_vectors.move_to_end(key)
+            similarity = float(np.dot(q,vector)/(np.linalg.norm(q)*np.linalg.norm(vector)))
+        lexical = len(tokens & set(re.findall(r"\w+",row["text"].lower()))) if mode != "semantic" else 0
+        if lexical or (similarity is not None and similarity >= float(os.environ.get("MIN_SEMANTIC_SIMILARITY","0.65"))):
+            rows.append({"id":row["id"],"version":row["version"],"semanticSimilarity":similarity,
+                         "score": (similarity or 0) + min(lexical,5)*0.1})
+    return sorted(rows,key=lambda r:(-r["score"],r["id"]))[:int(data.get("limit",10))]
+
+
+def passage(data):
+    from lancedb.query import ColumnOrdering
+    bid,fp,pid = int(data["bookId"]),data["fingerprint"],data["passageId"]
+    if not re.fullmatch(r"[a-f0-9]{64}",fp) or not re.fullmatch(r"[a-f0-9]{64}",pid):
+        raise ValueError("Invalid citation")
+    active = conn.execute("SELECT fingerprint FROM sources WHERE book_id=?",(bid,)).fetchone()
+    tbl = table()
+    if not active or active[0] != fp or tbl is None: raise ValueError("Citation unavailable or stale; search again")
+    where = f"book_id={bid} AND fingerprint='{fp}'"
+    rows = tbl.search().where(f"{where} AND id='{pid}'").limit(1).to_list()
+    if not rows: raise ValueError("Citation unavailable or stale; search again")
+    row = rows[0]
+    count = min(2,max(0,int(data.get("context",1))))
+    # Filter before LIMIT, sorted offsets; never cross section/page boundaries.
+    context = []
+    if count:
+        section = int(row["section"])
+        for direction,op,ascending in [("before","<",False),("after",">",True)]:
+            adjacent = (tbl.search().where(f"{where} AND section={section} AND char_start{op}{int(row['char_start'])}")
+                        .order_by([ColumnOrdering(column_name="char_start",ascending=ascending)]).limit(count).to_list())
+            context.extend(adjacent)
+    clean = lambda r: {k:v for k,v in r.items() if k != "vector"}
+    return {"passage":clean(row),"context":[clean(r) for r in sorted(context,key=lambda r:r["char_start"])]}
+
+
 def dispatch(data):
     op = data["op"]
+    if op == "search_notes": return search_notes(data)
+    if op == "passage": return passage(data)
     if op == "jobs":
         names = [r[1] for r in conn.execute("PRAGMA table_info(jobs)")]
         return [dict(zip(names,row)) for row in conn.execute("SELECT * FROM jobs")]

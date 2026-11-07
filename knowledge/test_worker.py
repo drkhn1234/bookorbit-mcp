@@ -116,5 +116,38 @@ class ReleaseOneTests(unittest.TestCase):
         self.assertEqual(w.search({"query":"electromagnetism Maxwell magnetic fields","allowed":allowed}),[])
         self.assertTrue(w.search({"query":"class variables","allowed":allowed,"mode":"lexical"}))
 
+
+class ReleaseTwoTests(unittest.TestCase):
+    def test_versioned_citation_context_and_stale_denial(self):
+        text = " ".join(f"neuron{i}" for i in range(550))
+        data = {"bookId": 91, "fingerprint": "c"*64, "sections": [
+            {"index": 0, "label": "Page 1", "page": 1, "text": text},
+            {"index": 1, "label": "Page 2", "page": 2, "text": "Another unrelated section."}]}
+        w.index(data)
+        rows = sorted(w.chunks(data),key=lambda r:(r["section"],r["char_start"]))
+        args = {"op":"passage","bookId":91,"fingerprint":"c"*64,"passageId":rows[1]["id"],"context":1}
+        result = w.dispatch(args)
+        self.assertEqual(result["passage"]["id"],rows[1]["id"])
+        self.assertEqual([r["id"] for r in result["context"]],[rows[0]["id"],rows[2]["id"]])
+        self.assertTrue(all(r["section"]==0 for r in result["context"]))
+        self.assertEqual(w.chunks(data)[1]["id"],rows[1]["id"])
+        with self.assertRaises(ValueError): w.dispatch({**args,"bookId":92})
+        with self.assertRaises(ValueError): w.dispatch({**args,"fingerprint":"d"*64})
+        w.index({**data,"fingerprint":"d"*64})
+        with self.assertRaises(ValueError): w.dispatch(args)
+
+    def test_semantic_notes_use_only_current_session_snapshot(self):
+        a = "a"*8+"-"+"a"*4+"-"+"a"*4+"-"+"a"*4+"-"+"a"*12
+        b = a.replace("a","b")
+        note = {"id":1,"version":"e"*64,"text":"Neurons communicate using electrical impulses and chemical neurotransmitters across synapses."}
+        args = {"op":"search_notes","namespace":a,"items":[note],"query":"How do nerve cells send signals?","mode":"semantic"}
+        self.assertEqual(w.dispatch(args)[0]["id"],1)
+        # Same annotation id with new text cannot retrieve a cached old version.
+        self.assertEqual(w.dispatch({**args,"items":[{**note,"version":"f"*64,"text":"Cooking bread uses wheat flour and yeast."}]}),[])
+        self.assertEqual(w.dispatch({**args,"items":[]}),[])
+        self.assertEqual(w.dispatch({**args,"namespace":b,"items":[]}),[])
+        self.assertIsNone(w.conn.execute("SELECT * FROM sources WHERE book_id=999").fetchone())
+        self.assertTrue(all(not isinstance(v,str) for v in w.note_vectors.values()))
+
 if __name__ == "__main__":
     unittest.main()

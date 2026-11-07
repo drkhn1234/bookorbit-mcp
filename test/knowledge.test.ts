@@ -152,7 +152,7 @@ test("actual MCP initializes, discovers extensions and previews/applies native a
   await client.connect(b);
   try {
     const tools = await client.listTools();
-    assert.equal(tools.tools.length, 11);
+    assert.equal(tools.tools.length, 13);
     const invoke = async (args: any) =>
       client.callTool({ name: "library_maintenance", arguments: args });
     const preview = await invoke({
@@ -325,4 +325,127 @@ test("explicit index dispatch never chooses an unrelated pending book and respec
     KnowledgeService.prototype.status = originalStatus;
     KnowledgeService.prototype.indexBook = originalIndex;
   }
+});
+
+test("versioned passage context rejects stale sources and post-worker revocation", async () => {
+  let revoked = false;
+  const fp = sourceFingerprint(book as any);
+  const native = {
+    async getBook() {
+      if (revoked) throw new BookOrbitError("Not found", 404, "/books/1");
+      return book;
+    },
+  } as unknown as BookOrbitClient;
+  let calls = 0;
+  const worker = {
+    async request(data: any): Promise<any> {
+      calls++;
+      assert.equal(data.fingerprint, fp);
+      revoked = true;
+      return {
+        passage: { id: "c".repeat(64), book_id: 1, fingerprint: fp, text: "private" },
+        context: [],
+      };
+    },
+  };
+  const service = new KnowledgeService(native, {} as BookService, tmpdir(), worker);
+  await assert.rejects(
+    service.passage(1, "c".repeat(64), "0".repeat(64)),
+    /version changed/,
+  );
+  assert.equal(calls, 0);
+  await assert.rejects(service.passage(1, "c".repeat(64), fp), /Not found/);
+});
+
+test("semantic notes omit deleted, edited and revoked results even after ranking", async () => {
+  const initial = {
+    id: 5,
+    bookId: 1,
+    text: "Neurons communicate via synapses.",
+    note: null,
+    deletedAt: null,
+  };
+  let live: any[] = [initial];
+  let revoke = false;
+  let ranked = false;
+  const native = {
+    async queryBooks() {
+      ranked = false;
+      return { items: [book], total: 1 };
+    },
+    async getBook() {
+      if (revoke) throw new BookOrbitError("Not found", 404, "/books/1");
+      return book;
+    },
+    async listAnnotations(opts: any) {
+      return { items: ranked ? live : [initial], total: 1, pageSize: 100 };
+    },
+  } as unknown as BookOrbitClient;
+  let change: () => void = () => {};
+  let namespace: string | undefined;
+  const worker = {
+    async request(data: any): Promise<any> {
+      assert.equal(data.op, "search_notes");
+      namespace = data.namespace;
+      ranked = true;
+      assert.equal(data.items.length, 1);
+      change();
+      return [{ ...data.items[0], score: 0.9, semanticSimilarity: 0.9 }];
+    },
+  };
+  const service = new KnowledgeService(native, {} as BookService, tmpdir(), worker);
+  assert.equal((await service.searchAnnotations("nerve signals")).annotations.length, 1);
+  change = () => {
+    live = [];
+  };
+  assert.equal((await service.searchAnnotations("nerve signals")).annotations.length, 0);
+  change = () => {
+    live = [{ ...initial, text: "edited" }];
+  };
+  assert.equal((await service.searchAnnotations("nerve signals")).annotations.length, 0);
+  change = () => {
+    revoke = true;
+  };
+  assert.equal((await service.searchAnnotations("nerve signals")).annotations.length, 0);
+  const firstNamespace = namespace;
+  revoke = false;
+  change = () => {};
+  live = [initial];
+  const other = { ...native } as BookOrbitClient;
+  await new KnowledgeService(
+    other,
+    {} as BookService,
+    tmpdir(),
+    worker,
+  ).searchAnnotations("nerve signals");
+  assert.notEqual(namespace, firstNamespace);
+});
+
+test("annotation search excludes inaccessible snapshot notes and reports bounded coverage", async () => {
+  const native = {
+    async queryBooks() {
+      return { items: [], total: 0 };
+    },
+    async listAnnotations() {
+      return {
+        items: [{ id: 9, bookId: 99, text: "PRIVATE" }],
+        total: 600,
+        pageSize: 100,
+      };
+    },
+  } as unknown as BookOrbitClient;
+  const worker = {
+    async request(data: any): Promise<any> {
+      assert.deepEqual(data.items, []);
+      return [];
+    },
+  };
+  const result = await new KnowledgeService(
+    native,
+    {} as BookService,
+    tmpdir(),
+    worker,
+  ).searchAnnotations("anything");
+  assert.equal(result.annotations.length, 0);
+  assert.equal(result.coverage.truncated, true);
 });

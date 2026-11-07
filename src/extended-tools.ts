@@ -34,6 +34,38 @@ export function registerExtendedTools(
     process.env.CACHE_DIR ?? join(homedir(), ".cache", "bookorbit-mcp"),
   );
   server.registerTool(
+    "get_passage",
+    {
+      description:
+        "Resolve an exact versioned search_passages citation and up to two adjacent chunks on each side in the same section/page. Rejects stale source versions and inaccessible books. Context chunks may overlap. No invented print pages or EPUB CFIs.",
+      annotations: readOnly,
+      inputSchema: {
+        bookId: id,
+        passageId: z.string().regex(/^[a-f0-9]{64}$/),
+        sourceVersion: z.string().regex(/^[a-f0-9]{64}$/),
+        context: z.number().int().min(0).max(2).default(1),
+      },
+    },
+    async ({ bookId, passageId, sourceVersion, context }) =>
+      guard(() => knowledge.passage(bookId, passageId, sourceVersion, context)),
+  );
+  server.registerTool(
+    "search_annotations",
+    {
+      description:
+        "Semantic, lexical or hybrid search of only your own live highlights and notes in currently accessible books. Scans at most 500 recent notes, reports incomplete coverage, rechecks edits/deletions/access before returning. No shared or persistent annotation vector index. Reader chapter/page locations are not invented MCP section indices.",
+      annotations: readOnly,
+      inputSchema: {
+        query: z.string().trim().min(1).max(1000),
+        bookIds: z.array(id).min(1).max(200).optional(),
+        libraryIds: z.array(id).min(1).max(50).optional(),
+        limit: id.max(20).default(10),
+        mode: z.enum(["hybrid", "semantic", "lexical"]).default("hybrid"),
+      },
+    },
+    async ({ query, ...opts }) => guard(() => knowledge.searchAnnotations(query, opts)),
+  );
+  server.registerTool(
     "inspect_book",
     {
       description:
@@ -180,7 +212,7 @@ export function registerExtendedTools(
     "search_passages",
     {
       description:
-        "Search conceptually across indexed PDF and EPUB books with hybrid semantic + lexical retrieval. Returns source passages, PDF page or EPUB section locations, and citations for RAG answers. Filter bookIds/libraryIds to narrow scope. Current account permissions are enforced on every call. Check coverage.pending; new books index automatically in the background. includeAnnotations adds lexical matches from only your own live notes/highlights.",
+        "Search conceptually across indexed PDF and EPUB books with hybrid semantic + lexical retrieval. Returns source passages, PDF page or EPUB section locations, and citations for RAG answers. Filter bookIds/libraryIds to narrow scope. Current account permissions are enforced on every call. Check coverage.pending; new books index automatically in the background. includeAnnotations adds hybrid matches from only your own live notes/highlights (bounded coverage reported). Use get_passage for versioned surrounding context.",
       annotations: readOnly,
       inputSchema: {
         query: z.string().trim().min(1).max(1000),
