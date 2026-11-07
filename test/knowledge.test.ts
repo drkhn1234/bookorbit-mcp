@@ -281,3 +281,48 @@ test("bounded pending-book inspection rechecks permission after extracting text"
   const service = new KnowledgeService(native, {} as BookService, tmpdir(), worker);
   await assert.rejects(service.inspect(1, 1, 2), /Not found/);
 });
+
+test("explicit index dispatch never chooses an unrelated pending book and respects pause", async () => {
+  const originalStatus = KnowledgeService.prototype.status;
+  const originalIndex = KnowledgeService.prototype.indexBook;
+  const selected: number[] = [];
+  let paused = false;
+  const native = {
+    async queryBooks() {
+      return {
+        items: [
+          { ...book, id: 1 },
+          { ...book, id: 306 },
+        ],
+        total: 2,
+      };
+    },
+  } as unknown as BookOrbitClient;
+  try {
+    KnowledgeService.prototype.status = async () => ({
+      model: "test",
+      revision: "1",
+      indexIdentity: "test",
+      building: [],
+      accessibleBooks: 2,
+      supportedBooks: 2,
+      indexed: 0,
+      pending: [1, 306],
+      unsupported: 0,
+      jobs: paused ? [{ book_id: 306, state: "paused", priority: 100 }] : [],
+    });
+    KnowledgeService.prototype.indexBook = async function (id: number) {
+      selected.push(id);
+      return { bookId: id };
+    };
+    const service = new KnowledgeService(native, {} as BookService, tmpdir());
+    await service.indexPending(1, [306]);
+    assert.deepEqual(selected, [306]);
+    paused = true;
+    await service.indexPending(1, [306]);
+    assert.deepEqual(selected, [306]);
+  } finally {
+    KnowledgeService.prototype.status = originalStatus;
+    KnowledgeService.prototype.indexBook = originalIndex;
+  }
+});
