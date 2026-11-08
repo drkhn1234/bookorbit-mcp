@@ -18,11 +18,14 @@ import time
 os.umask(0o077)
 os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-MODEL = os.environ.get("EMBED_MODEL", "BAAI/bge-small-en-v1.5")
-REVISION = os.environ.get("EMBED_REVISION", "1")
+from embeddings import EmbeddingConfig, VoyageEmbedding
+
+EMBEDDING = EmbeddingConfig.from_env()
+MODEL = EMBEDDING.model
+REVISION = EMBEDDING.revision
 ROOT = Path(os.environ.get("KNOWLEDGE_DIR", "data/knowledge"))
 ROOT.mkdir(parents=True, exist_ok=True, mode=0o700)
-IDENTITY = hashlib.sha256(f"{MODEL}:{REVISION}:chunk-v1-200-40".encode()).hexdigest()[:16]
+IDENTITY = EMBEDDING.identity
 DBROOT = ROOT / IDENTITY
 DBROOT.mkdir(exist_ok=True)
 conn = sqlite3.connect(DBROOT / "sources.sqlite3")
@@ -38,9 +41,17 @@ vectors = None
 def model():
     global engine
     if engine is None:
-        from fastembed import TextEmbedding
-        engine = TextEmbedding(model_name=MODEL, cache_dir=os.environ.get("EMBED_CACHE_DIR", str(ROOT / "models")), threads=1)
+        if EMBEDDING.provider == "voyage":
+            engine = VoyageEmbedding(EMBEDDING)
+        else:
+            from fastembed import TextEmbedding
+            engine = TextEmbedding(model_name=MODEL, cache_dir=os.environ.get("EMBED_CACHE_DIR", str(ROOT / "models")), threads=1)
     return engine
+
+
+def query_vector(text):
+    embeddings = model().query_embed([text]) if EMBEDDING.provider == "voyage" else model().embed([text])
+    return next(iter(embeddings))
 
 
 def store():
@@ -147,10 +158,11 @@ def index(data):
     with conn:
         conn.execute("UPDATE jobs SET completed=? WHERE book_id=?", (len(rows)-len(pending),book_id))
     print(f"[Knowledge] indexing book={book_id} passages={len(rows)}", file=sys.stderr, flush=True)
-    for start in range(0, len(pending), 4):
+    batch_size = 32 if EMBEDDING.provider == "voyage" else 4
+    for start in range(0, len(pending), batch_size):
         if conn.execute("SELECT state FROM jobs WHERE book_id=?", (book_id,)).fetchone()[0] == "paused":
             raise ValueError("Indexing paused")
-        batch = pending[start:start + 4]
+        batch = pending[start:start + batch_size]
         began = time.monotonic()
         embeddings = list(model().embed([r["text"] for r in batch]))
         for row, vector in zip(batch, embeddings, strict=True):
@@ -192,7 +204,7 @@ def search(data):
     semantic = []
     lexical = []
     if mode != "lexical":
-        vector = next(model().embed([data["query"]])).tolist()
+        vector = query_vector(data["query"]).tolist()
         semantic = tbl.search(vector).distance_type("cosine").where(where, prefilter=True).limit(100).to_list()
     ignored = set("the a an of to in and or how what why does do is are about explain explaining find passages books my across with from fields field".split())
     tokens = [t for t in re.findall(r"\w+", data["query"].lower(), re.UNICODE) if t not in ignored and len(t)>2][:32]
@@ -218,7 +230,7 @@ def search(data):
             current["semanticSimilarity"] = similarities.get(key)
             current["lexicalMatch"] = key in lexical_ids
             current["score"] += 1 / (60 + position + 1)
-    return sorted([r for r in ranked.values() if r["lexicalMatch"] or (r["semanticSimilarity"] or 0) >= float(os.environ.get("MIN_SEMANTIC_SIMILARITY", "0.65"))], key=lambda r: (-r["score"], r["id"]))[:int(data.get("limit", 10))]
+    return sorted([r for r in ranked.values() if r["lexicalMatch"] or (r["semanticSimilarity"] or 0) >= EMBEDDING.minimum_similarity], key=lambda r: (-r["score"], r["id"]))[:int(data.get("limit", 10))]
 
 
 # Session-local embedding vectors only. Authoritative note text always arrives
@@ -235,7 +247,7 @@ def search_notes(data):
     import numpy as np
     q = None
     if mode != "lexical" and items:
-        q = np.asarray(next(model().embed([query])), dtype=float)
+        q = np.asarray(query_vector(query), dtype=float)
         for row in items:
             if (namespace,row["version"]) in note_vectors: note_vectors.move_to_end((namespace,row["version"]))
         pending = [r for r in items if (namespace,r["version"]) not in note_vectors]
@@ -254,7 +266,7 @@ def search_notes(data):
             note_vectors.move_to_end(key)
             similarity = float(np.dot(q,vector)/(np.linalg.norm(q)*np.linalg.norm(vector)))
         lexical = len(tokens & set(re.findall(r"\w+",row["text"].lower()))) if mode != "semantic" else 0
-        if lexical or (similarity is not None and similarity >= float(os.environ.get("MIN_SEMANTIC_SIMILARITY","0.65"))):
+        if lexical or (similarity is not None and similarity >= EMBEDDING.minimum_similarity):
             rows.append({"id":row["id"],"version":row["version"],"semanticSimilarity":similarity,
                          "score": (similarity or 0) + min(lexical,5)*0.1})
     return sorted(rows,key=lambda r:(-r["score"],r["id"]))[:int(data.get("limit",10))]
@@ -322,6 +334,9 @@ def dispatch(data):
         return search(data)
     if op == "status":
         return {"model": MODEL, "revision": REVISION, "indexIdentity": IDENTITY,
+                "embedding": {"provider": EMBEDDING.provider, "documentModel": MODEL, "queryModel": EMBEDDING.query_model,
+                              "dimensions": EMBEDDING.dimensions, "externalContent": EMBEDDING.provider == "voyage",
+                              "minimumSimilarity": EMBEDDING.minimum_similarity, "thresholdCalibrated": False},
                 "building": [{"bookId": r[0], "completedPassages": r[1]} for r in conn.execute("SELECT book_id,count(*) FROM staged GROUP BY book_id")],
                 "sources": [{"bookId": r[0], "fingerprint": r[1], "passages": r[2]} for r in conn.execute("SELECT * FROM sources")]}
     raise ValueError("Unknown operation")

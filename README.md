@@ -165,3 +165,5 @@ node --import tsx scripts/mcp-check.mts   # drives the built server over the MCP
 - **Not included (v1):** semantic/RAG search, cross-library content search,
   PDF/MOBI, and any write operations. The cache layout leaves room to add a
   cross-book index later.
+
+Optional hosted embedding providers and migration: see [EMBEDDINGS.md](EMBEDDINGS.md). Local BGE remains the default until explicit configuration.

@@ -25,6 +25,7 @@ type IndexStatus = {
   model: string;
   revision: string;
   indexIdentity: string;
+  embedding?: Record<string, unknown>;
   building?: { bookId: number; completedPassages: number }[];
   sources: { bookId: number; fingerprint: string; passages: number }[];
 };
@@ -161,6 +162,7 @@ export class KnowledgeService {
       model: status.model,
       revision: status.revision,
       indexIdentity: status.indexIdentity,
+      embedding: status.embedding,
       building:
         status.building?.filter((s) => catalog.some((b) => b.id === s.bookId)) ?? [],
       accessibleBooks: catalog.length,
