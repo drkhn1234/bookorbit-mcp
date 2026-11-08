@@ -105,7 +105,7 @@ class VoyageEmbedding:
                     error.close()
                     raise ValueError(f"Voyage embedding request failed (HTTP {error.code}); check credentials, quota and provider availability") from None
                 retry_after = error.headers.get("Retry-After", "")
-                delay = min(30, max(0, float(retry_after))) if retry_after.isdigit() else min(16, 2 ** attempt) + random.random()
+                delay = min(30, max(0, float(retry_after))) if retry_after.isdigit() else (30 if error.code == 429 else min(16, 2 ** attempt) + random.random())
                 error.close()
                 time.sleep(delay)
             except (urllib.error.URLError, TimeoutError, OSError):

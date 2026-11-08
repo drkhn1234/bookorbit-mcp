@@ -77,6 +77,13 @@ class ProviderTests(unittest.TestCase):
             self.assertNotIn("PRIVATE", str(caught.exception))
             self.assertNotIn("synthetic-secret", str(caught.exception))
 
+    def test_rate_limit_without_retry_after_waits_for_minute_window(self):
+        provider = self.provider()
+        errors = [urllib.error.HTTPError("https://api.voyageai.com", 429, "PRIVATE", {}, io.BytesIO()) for _ in range(2)]
+        with patch.object(provider.opener, "open", side_effect=[*errors,self.response()]), patch("embeddings.time.sleep") as sleep:
+            self.assertEqual(len(provider.query_embed(["synthetic"])), 1)
+            self.assertEqual([c.args[0] for c in sleep.call_args_list], [30,30])
+
     def test_bounds_do_not_silently_truncate(self):
         provider = self.provider()
         with patch.object(provider.opener, "open") as call:
