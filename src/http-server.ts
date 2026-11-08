@@ -641,6 +641,7 @@ async function indexTick(): Promise<void> {
   )
     return;
   indexing = true;
+  let madeProgress = false;
   try {
     const users = new Map(
       Object.values(oauthData.tokens)
@@ -652,6 +653,9 @@ async function indexTick(): Promise<void> {
       const service = new BookService(client, sharedCache);
       const knowledge = new KnowledgeService(client, service, CACHE_DIR, indexingWorker);
       const result = await knowledge.indexPending(3);
+      madeProgress ||= result.results.some(
+        (r) => typeof r === "object" && r !== null && !("error" in r),
+      );
       console.error(
         `[Index] account=${user.username} processed=${result.results.length} pendingBefore=${result.pendingBefore}`,
       );
@@ -660,6 +664,9 @@ async function indexTick(): Promise<void> {
     console.error("[Index] Background indexing failed; will retry next interval");
   } finally {
     indexing = false;
+    // Keep a single serialized worker busy; back off when idle or failing.
+    // Rebuild the live authorized account list on every tick.
+    setTimeout(() => void indexTick(), madeProgress ? 1000 : 60_000).unref();
   }
 }
 
@@ -667,7 +674,6 @@ async function main(): Promise<void> {
   await loadOAuthData();
   process.umask(0o077);
   setTimeout(() => void indexTick(), 15_000).unref();
-  setInterval(() => void indexTick(), 60_000).unref();
   process.once("exit", () => {
     knowledgeWorker.close();
     indexingWorker.close();

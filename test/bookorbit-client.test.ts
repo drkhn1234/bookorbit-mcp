@@ -304,3 +304,24 @@ test("encodes internal epub file paths but keeps slashes", async () => {
     "GET https://ex.com/api/v1/epub/327/file/OPS/xhtml/008%20chapter001.xhtml",
   );
 });
+
+test("download enforces default and explicit limits in headers and streamed bytes", async () => {
+  const client = new BookOrbitClient({
+    baseUrl: "https://ex.com",
+    token: "synthetic",
+    fetchImpl: mockFetch(
+      () =>
+        new Response("synthetic", {
+          headers: { "content-length": String(90 * 1024 * 1024) },
+        }),
+    ).fetch,
+  });
+  await assert.rejects(client.downloadFile(1), /80 MiB/);
+  assert.equal((await client.downloadFile(1, 128 * 1024 * 1024)).toString(), "synthetic");
+  const streaming = new BookOrbitClient({
+    baseUrl: "https://ex.com",
+    token: "synthetic",
+    fetchImpl: mockFetch(() => new Response("too much data")).fetch,
+  });
+  await assert.rejects(streaming.downloadFile(1, 4), /download limit/);
+});

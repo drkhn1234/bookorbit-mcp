@@ -92,9 +92,9 @@ class ProviderTests(unittest.TestCase):
 
     def test_large_batches_split_without_dropping_text(self):
         provider = self.provider()
-        with patch.object(provider.opener, "open", side_effect=[self.response(tuple(range(16))), self.response(tuple(range(17)))]) as call:
-            result = provider.embed(["synthetic"] * 33)
-        self.assertEqual(len(result), 33)
+        with patch.object(provider.opener, "open", side_effect=[self.response(tuple(range(64))), self.response(tuple(range(65)))]) as call:
+            result = provider.embed(["synthetic"] * 129)
+        self.assertEqual(len(result), 129)
         self.assertEqual(call.call_count, 2)
 
 
@@ -118,11 +118,11 @@ class RemoteWorkerTests(unittest.TestCase):
                 # Deterministic synthetic vectors test plumbing, NOT model quality.
                 return io.BytesIO(json.dumps({"data": [{"index": i, "embedding": [1, 0] + [0]*1022} for i,_ in enumerate(payload["input"])]}).encode())
             data = {"bookId": 1, "fingerprint": "a"*64, "sections": [
-                {"index": i, "label": f"Synthetic section {i}", "page": i+1, "text": "Electric fields describe force per unit charge."} for i in range(33)]}
+                {"index": i, "label": f"Synthetic section {i}", "page": i+1, "text": "Electric fields describe force per unit charge."} for i in range(129)]}
             try:
-                with patch.object(provider.opener, "open", side_effect=[self._response(32), ValueError("simulated interruption")]):
+                with patch.object(provider.opener, "open", side_effect=[self._response(128), ValueError("simulated interruption")]):
                     with self.assertRaisesRegex(ValueError, "interruption"): w.index(data)
-                self.assertEqual(w.conn.execute("SELECT count(*) FROM staged").fetchone()[0], 32)
+                self.assertEqual(w.conn.execute("SELECT count(*) FROM staged").fetchone()[0], 128)
                 self.assertEqual(w.conn.execute("SELECT count(*) FROM sources").fetchone()[0], 0)
                 with patch.object(provider.opener, "open", side_effect=response):
                     w.index(data)

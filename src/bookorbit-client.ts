@@ -412,7 +412,9 @@ export class BookOrbitClient {
     });
     if (Number(res.headers.get("content-length")) > maxBytes) {
       await res.body?.cancel();
-      throw new Error("Book exceeds extraction download limit (80 MiB)");
+      throw new Error(
+        `Book exceeds extraction download limit (${Math.floor(maxBytes / 1024 / 1024)} MiB)`,
+      );
     }
     const chunks: Uint8Array[] = [];
     let size = 0;
@@ -423,7 +425,9 @@ export class BookOrbitClient {
         if (done) break;
         size += value.length;
         if (size > maxBytes)
-          throw new Error("Book exceeds extraction download limit (80 MiB)");
+          throw new Error(
+            `Book exceeds extraction download limit (${Math.floor(maxBytes / 1024 / 1024)} MiB)`,
+          );
         chunks.push(value);
       }
     } finally {

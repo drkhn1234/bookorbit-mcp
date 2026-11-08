@@ -449,3 +449,21 @@ test("annotation search excludes inaccessible snapshot notes and reports bounded
   assert.equal(result.annotations.length, 0);
   assert.equal(result.coverage.truncated, true);
 });
+
+test("PDF limit allows bounded larger textbooks and rejects unsafe configuration", async () => {
+  const { pdfMaxBytes } = await import("../src/pdf-limits.js");
+  const before = process.env.PDF_MAX_MIB;
+  try {
+    delete process.env.PDF_MAX_MIB;
+    assert.equal(pdfMaxBytes(), 80 * 1024 * 1024);
+    process.env.PDF_MAX_MIB = "128";
+    assert.equal(pdfMaxBytes(), 128 * 1024 * 1024);
+    for (const value of ["0", "129", "NaN", "1.5"]) {
+      process.env.PDF_MAX_MIB = value;
+      assert.throws(pdfMaxBytes, /PDF_MAX_MIB/);
+    }
+  } finally {
+    if (before === undefined) delete process.env.PDF_MAX_MIB;
+    else process.env.PDF_MAX_MIB = before;
+  }
+});

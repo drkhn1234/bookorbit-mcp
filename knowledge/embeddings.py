@@ -82,7 +82,7 @@ class VoyageEmbedding:
         if not texts:
             return []
         # Bound bytes conservatively rather than silently truncating input.
-        if len(texts) > 32 or sum(len(t.encode("utf-8")) for t in texts) > 100_000:
+        if len(texts) > 128 or sum(len(t.encode("utf-8")) for t in texts) > 100_000:
             if len(texts) == 1:
                 raise ValueError("Voyage input exceeds conservative input size limit")
             middle = len(texts) // 2

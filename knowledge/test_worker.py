@@ -164,5 +164,17 @@ class ReleaseTwoTests(unittest.TestCase):
         self.assertIsNone(w.conn.execute("SELECT * FROM sources WHERE book_id=999").fetchone())
         self.assertTrue(all(not isinstance(v,str) for v in w.note_vectors.values()))
 
+
+
+class PdfLimitTests(unittest.TestCase):
+    def test_bounded_pdf_limit_configuration(self):
+        from unittest.mock import patch
+        with patch.dict(os.environ, {"PDF_MAX_MIB":"128"}):
+            self.assertEqual(w.pdf_limit_bytes(),128*1024*1024)
+        for value in ("0","129","NaN","1.5"):
+            with patch.dict(os.environ,{"PDF_MAX_MIB":value}):
+                with self.assertRaises(ValueError): w.pdf_limit_bytes()
+
+
 if __name__ == "__main__":
     unittest.main()

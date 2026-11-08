@@ -67,11 +67,18 @@ def table():
     return db.open_table("passages") if "passages" in db.table_names() else None
 
 
+def pdf_limit_bytes():
+    raw = os.environ.get("PDF_MAX_MIB", "80")
+    if not raw.isdigit() or not 1 <= int(raw) <= 128:
+        raise ValueError("PDF_MAX_MIB must be an integer between1 and128")
+    return int(raw) * 1024 * 1024
+
+
 def extract_pdf(data):
     import pymupdf
     raw = base64.b64decode(data["data"], validate=True)
-    if len(raw) > 80 * 1024 * 1024:
-        raise ValueError("PDF exceeds 80 MiB limit")
+    if len(raw) > pdf_limit_bytes():
+        raise ValueError("PDF exceeds configured MiB limit")
     sections = []
     ocr_pages = []
     unavailable = []
@@ -158,7 +165,7 @@ def index(data):
     with conn:
         conn.execute("UPDATE jobs SET completed=? WHERE book_id=?", (len(rows)-len(pending),book_id))
     print(f"[Knowledge] indexing book={book_id} passages={len(rows)}", file=sys.stderr, flush=True)
-    batch_size = 32 if EMBEDDING.provider == "voyage" else 4
+    batch_size = 128 if EMBEDDING.provider == "voyage" else 4
     for start in range(0, len(pending), batch_size):
         if conn.execute("SELECT state FROM jobs WHERE book_id=?", (book_id,)).fetchone()[0] == "paused":
             raise ValueError("Indexing paused")

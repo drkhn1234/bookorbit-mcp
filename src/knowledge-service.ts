@@ -1,3 +1,4 @@
+import { pdfMaxBytes } from "./pdf-limits.js";
 import { passageCitation } from "./citations.js";
 import { searchOwnAnnotations } from "./annotation-search.js";
 import { metadataScore, queryTerms } from "./retrieval-ranking.js";
@@ -90,7 +91,7 @@ export class KnowledgeService {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
     if (!document) {
-      const data = await this.client.downloadFile(file.id);
+      const data = await this.client.downloadFile(file.id, pdfMaxBytes());
       document = await this.worker.request<PdfDocument>({
         op: "pdf",
         data: data.toString("base64"),
@@ -220,7 +221,12 @@ export class KnowledgeService {
             error instanceof BookOrbitError
               ? `BookOrbit HTTP ${error.status}`
               : error instanceof Error &&
-                  /paused|limit|exceeds|No extractable|Encrypted PDF/.test(error.message)
+                  (/paused|limit|exceeds|No extractable|Encrypted PDF/.test(
+                    error.message,
+                  ) ||
+                    /^Voyage embedding (request failed \(HTTP \d{3}\)|network failure)/.test(
+                      error.message,
+                    ))
                 ? error.message
                 : "Indexing failed; inspect worker configuration or retry";
           await knowledgeWorker.request({
@@ -267,7 +273,7 @@ export class KnowledgeService {
       if (!file) throw new Error("Bounded inspection supports EPUB/PDF");
       const document = await this.worker.request({
         op: "pdf_window",
-        data: (await this.client.downloadFile(file.id)).toString("base64"),
+        data: (await this.client.downloadFile(file.id, pdfMaxBytes())).toString("base64"),
         startPage: start,
         pageCount: count,
       });
