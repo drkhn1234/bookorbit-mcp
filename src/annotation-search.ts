@@ -1,12 +1,9 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { BookOrbitError, type BookOrbitClient } from "./bookorbit-client.js";
 import { sourceFingerprint } from "./book-service.js";
 import type { BookDetail, BookListItem, HubAnnotation } from "./types.js";
 import type { KnowledgeWorker } from "./knowledge-worker.js";
 
-// A server-created per-client namespace, never a caller-supplied user identity.
-// Only vectors (no note text) are cached in the worker's bounded session memory.
-const namespaces = new WeakMap<BookOrbitClient, string>();
 const version = (note: HubAnnotation) =>
   createHash("sha256")
     .update(
@@ -32,11 +29,8 @@ export async function searchOwnAnnotations(
   catalog: BookListItem[],
   opts: { limit?: number; mode?: string } = {},
 ) {
-  let namespace = namespaces.get(client);
-  if (!namespace) {
-    namespace = randomUUID();
-    namespaces.set(client, namespace);
-  }
+  // Authenticated upstream ID, never an MCP argument or unverified JWT claim.
+  const namespace = await client.annotationCacheNamespace();
   const allowed = new Map(catalog.map((b) => [b.id, b]));
   const notes: HubAnnotation[] = [];
   let total = 0;
@@ -60,6 +54,7 @@ export async function searchOwnAnnotations(
   >({
     op: "search_notes",
     namespace,
+    snapshotComplete: bookIdFilter === undefined && scanned >= total,
     query,
     mode: opts.mode ?? "hybrid",
     limit: Math.min(100, (opts.limit ?? 10) * 3),
@@ -149,7 +144,7 @@ export async function searchOwnAnnotations(
       truncated: scanned < total,
       embeddingTextLimit: 4000,
       scope: "live-own-notes-current-authorized-books",
-      cache: "bounded-session-vectors-only-no-persistent-note-index",
+      cache: "persistent-user-scoped-vectors-live-note-snapshot",
     },
   };
 }

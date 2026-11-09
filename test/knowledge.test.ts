@@ -369,6 +369,9 @@ test("semantic notes omit deleted, edited and revoked results even after ranking
   let revoke = false;
   let ranked = false;
   const native = {
+    async annotationCacheNamespace() {
+      return "a".repeat(64);
+    },
     async queryBooks() {
       ranked = false;
       return { items: [book], total: 1 };
@@ -411,7 +414,12 @@ test("semantic notes omit deleted, edited and revoked results even after ranking
   revoke = false;
   change = () => {};
   live = [initial];
-  const other = { ...native } as BookOrbitClient;
+  const other = {
+    ...native,
+    async annotationCacheNamespace() {
+      return "b".repeat(64);
+    },
+  } as BookOrbitClient;
   await new KnowledgeService(
     other,
     {} as BookService,
@@ -423,6 +431,9 @@ test("semantic notes omit deleted, edited and revoked results even after ranking
 
 test("annotation search excludes inaccessible snapshot notes and reports bounded coverage", async () => {
   const native = {
+    async annotationCacheNamespace() {
+      return "a".repeat(64);
+    },
     async queryBooks() {
       return { items: [], total: 0 };
     },

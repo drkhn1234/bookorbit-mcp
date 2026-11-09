@@ -3,7 +3,6 @@
 Only its parent supplies authorized documents/candidate fingerprints. Originals
 are never modified. Indexes can be deleted and rebuilt. stdout is protocol only.
 """
-from collections import OrderedDict
 import base64
 import fcntl
 import hashlib
@@ -240,37 +239,65 @@ def search(data):
     return sorted([r for r in ranked.values() if r["lexicalMatch"] or (r["semanticSimilarity"] or 0) >= EMBEDDING.minimum_similarity], key=lambda r: (-r["score"], r["id"]))[:int(data.get("limit", 10))]
 
 
-# Session-local embedding vectors only. Authoritative note text always arrives
-# from a fresh own-user API snapshot; never inserted in the book Lance/FTS store.
-note_vectors = OrderedDict()
+# Separate, model-scoped derived cache; no annotation text or credentials on disk.
+# Only the current authenticated snapshot is ever ranked, never cached rows alone.
+notes_conn = sqlite3.connect(DBROOT / "annotations.sqlite3")
+notes_conn.execute("PRAGMA journal_mode=WAL")
+notes_conn.execute("CREATE TABLE IF NOT EXISTS vectors(namespace TEXT, note_id INTEGER, version TEXT, text_hash TEXT, vector TEXT, used REAL, PRIMARY KEY(namespace,note_id))")
+
 
 def search_notes(data):
     namespace = data["namespace"]
-    if not re.fullmatch(r"[a-f0-9-]{36}", namespace): raise ValueError("Invalid note namespace")
+    if not re.fullmatch(r"[a-f0-9]{64}", namespace): raise ValueError("Invalid note namespace")
     items = data["items"]
     if len(items) > 500: raise ValueError("Annotation snapshot exceeds 500 notes")
     mode = data.get("mode", "hybrid")
     query = data["query"]
     import numpy as np
     q = None
+    current_vectors = {}
+    now = time.time()
+    with notes_conn:
+        notes_conn.execute("DELETE FROM vectors WHERE used < ?", (now - 30*86400,))
+        if data.get("snapshotComplete"):
+            ids = [int(r["id"]) for r in items]
+            if ids:
+                notes_conn.execute("DELETE FROM vectors WHERE namespace=? AND note_id NOT IN (" + ",".join("?" for _ in ids) + ")", [namespace,*ids])
+            else:
+                notes_conn.execute("DELETE FROM vectors WHERE namespace=?", (namespace,))
+        # A changed version invalidates the previous vector even on lexical calls.
+        for row in items:
+            notes_conn.execute("DELETE FROM vectors WHERE namespace=? AND note_id=? AND (version!=? OR text_hash!=?)",
+                               (namespace,row["id"],row["version"],hashlib.sha256(row["text"][:4000].encode()).hexdigest()))
     if mode != "lexical" and items:
         q = np.asarray(query_vector(query), dtype=float)
+        pending = []
         for row in items:
-            if (namespace,row["version"]) in note_vectors: note_vectors.move_to_end((namespace,row["version"]))
-        pending = [r for r in items if (namespace,r["version"]) not in note_vectors]
+            cached = notes_conn.execute("SELECT vector FROM vectors WHERE namespace=? AND note_id=? AND version=? AND text_hash=?",
+                (namespace,row["id"],row["version"],hashlib.sha256(row["text"][:4000].encode()).hexdigest())).fetchone()
+            if cached:
+                current_vectors[row["id"]] = np.asarray(json.loads(cached[0]), dtype=float)
+            else:
+                pending.append(row)
         for start in range(0,len(pending),4):
             batch = pending[start:start+4]
-            for row,vector in zip(batch,model().embed([r["text"][:4000] for r in batch]),strict=True):
-                note_vectors[(namespace,row["version"])] = np.asarray(vector, dtype=float)
-        while len(note_vectors)>4096: note_vectors.popitem(last=False)
+            with notes_conn:
+                for row,vector in zip(batch,model().embed([r["text"][:4000] for r in batch]),strict=True):
+                    value = np.asarray(vector, dtype=float)
+                    current_vectors[row["id"]] = value
+                    notes_conn.execute("INSERT OR REPLACE INTO vectors VALUES(?,?,?,?,?,?)",
+                        (namespace,row["id"],row["version"],hashlib.sha256(row["text"][:4000].encode()).hexdigest(),json.dumps(value.tolist()),now))
+        with notes_conn:
+            notes_conn.executemany("UPDATE vectors SET used=? WHERE namespace=? AND note_id=?", [(now,namespace,r["id"]) for r in items])
+            # Bounded disk retention; eviction only costs later recomputation.
+            notes_conn.execute("DELETE FROM vectors WHERE rowid IN (SELECT rowid FROM vectors WHERE namespace=? ORDER BY used DESC,note_id DESC LIMIT -1 OFFSET 4096)", (namespace,))
+            notes_conn.execute("DELETE FROM vectors WHERE rowid IN (SELECT rowid FROM vectors ORDER BY used DESC LIMIT -1 OFFSET 16384)")
     tokens = set(re.findall(r"\w+",query.lower())) - set("how do does the a an of and to in my notes about are is".split())
     rows = []
     for row in items:
         similarity = None
         if q is not None:
-            key = (namespace,row["version"])
-            vector = note_vectors[key]
-            note_vectors.move_to_end(key)
+            vector = current_vectors[row["id"]]
             similarity = float(np.dot(q,vector)/(np.linalg.norm(q)*np.linalg.norm(vector)))
         lexical = len(tokens & set(re.findall(r"\w+",row["text"].lower()))) if mode != "semantic" else 0
         if lexical or (similarity is not None and similarity >= EMBEDDING.minimum_similarity):

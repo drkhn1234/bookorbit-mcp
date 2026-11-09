@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   Annotation,
   AnnotatedBookSummary,
@@ -78,6 +79,19 @@ export class BookOrbitClient {
 
   private get canReauthenticate(): boolean {
     return Boolean(this.config.username && this.config.password);
+  }
+
+  /** Stable cache scope derived only from the upstream-authenticated account. */
+  async annotationCacheNamespace(): Promise<string> {
+    const user = await this.getJson<{ id: number | string }>("/auth/me");
+    if (!(
+      (typeof user.id === "number" && Number.isSafeInteger(user.id) && user.id > 0) ||
+      (typeof user.id === "string" && user.id.length > 0)
+    ))
+      throw new Error("BookOrbit did not return an authenticated account identifier");
+    return createHash("sha256")
+      .update(JSON.stringify([this.apiBase, String(user.id), "annotation-v1"]))
+      .digest("hex");
   }
 
   async searchBooks(query: string, limit?: number): Promise<BookSearchResult[]> {

@@ -53,7 +53,7 @@ export function registerExtendedTools(
     "search_annotations",
     {
       description:
-        "Semantic, lexical or hybrid search of only your own live highlights and notes in currently accessible books. Scans at most 500 recent notes, reports incomplete coverage, rechecks edits/deletions/access before returning. No shared or persistent annotation vector index. Reader chapter/page locations are not invented MCP section indices.",
+        "Semantic, lexical or hybrid search of only your own live highlights and notes in currently accessible books. Scans at most 500 recent notes, reports incomplete coverage, rechecks edits/deletions/access before returning. Uses a persistent account/model-scoped vector cache; BookOrbit remains authoritative. Reader chapter/page locations are not invented MCP section indices.",
       annotations: readOnly,
       inputSchema: {
         query: z.string().trim().min(1).max(1000),

@@ -325,3 +325,27 @@ test("download enforces default and explicit limits in headers and streamed byte
   });
   await assert.rejects(streaming.downloadFile(1, 4), /download limit/);
 });
+
+test("annotation cache scope is stable across reconnects and bound to authenticated account and server", async () => {
+  const scope = (baseUrl: string, id: number) =>
+    new BookOrbitClient({
+      baseUrl,
+      token: "synthetic",
+      fetchImpl: mockFetch((url) => {
+        assert.ok(url.endsWith("/auth/me"));
+        return json({ id });
+      }).fetch,
+    }).annotationCacheNamespace();
+  const a = await scope("https://example.com", 1);
+  assert.equal(a, await scope("https://example.com/", 1));
+  assert.notEqual(a, await scope("https://example.com", 2));
+  assert.notEqual(a, await scope("https://other.example.com", 1));
+  await assert.rejects(
+    new BookOrbitClient({
+      baseUrl: "https://example.com",
+      token: "t",
+      fetchImpl: mockFetch(() => json({ username: "untrusted" })).fetch,
+    }).annotationCacheNamespace(),
+    /authenticated account identifier/,
+  );
+});

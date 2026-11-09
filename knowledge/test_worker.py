@@ -152,7 +152,7 @@ class ReleaseTwoTests(unittest.TestCase):
             with self.assertRaises(ValueError): w.index({**data,"fingerprint":"c"*64,"sections":[{"index":0,"label":"New","text":"A different text about bread and yeast."}]})
 
     def test_semantic_notes_use_only_current_session_snapshot(self):
-        a = "a"*8+"-"+"a"*4+"-"+"a"*4+"-"+"a"*4+"-"+"a"*12
+        a = "a"*64
         b = a.replace("a","b")
         note = {"id":1,"version":"e"*64,"text":"Neurons communicate using electrical impulses and chemical neurotransmitters across synapses."}
         args = {"op":"search_notes","namespace":a,"items":[note],"query":"How do nerve cells send signals?","mode":"semantic"}
@@ -162,7 +162,35 @@ class ReleaseTwoTests(unittest.TestCase):
         self.assertEqual(w.dispatch({**args,"items":[]}),[])
         self.assertEqual(w.dispatch({**args,"namespace":b,"items":[]}),[])
         self.assertIsNone(w.conn.execute("SELECT * FROM sources WHERE book_id=999").fetchone())
-        self.assertTrue(all(not isinstance(v,str) for v in w.note_vectors.values()))
+        self.assertNotIn("text", [r[1] for r in w.notes_conn.execute("PRAGMA table_info(vectors)")])
+
+    def test_note_vectors_survive_restart_and_remain_account_and_model_scoped(self):
+        from unittest.mock import patch
+        import numpy as np
+        class Engine:
+            def embed(self, texts): return [np.array([1.0,0.0]) for _ in texts]
+        args = {"namespace":"1"*64,"items":[{"id":123,"version":"a"*64,"text":"synthetic note"}],
+                "query":"synthetic","mode":"semantic","snapshotComplete":True}
+        with patch.object(w,"model",return_value=Engine()), patch.object(w,"query_vector",return_value=np.array([1.0,0.0])):
+            self.assertEqual(w.search_notes(args)[0]["id"],123)
+        # Reopen the database and worker module: cached documents need no provider.
+        spec = importlib.util.spec_from_file_location("restarted_notes",Path(__file__).with_name("worker.py"))
+        restarted = importlib.util.module_from_spec(spec); spec.loader.exec_module(restarted)
+        with patch.object(restarted,"query_vector",return_value=np.array([1.0,0.0])), patch.object(restarted,"model",side_effect=AssertionError("document re-embedded")):
+            self.assertEqual(restarted.search_notes(args)[0]["id"],123)
+            # Account B cannot borrow account A's identical annotation/vector.
+            with self.assertRaises(AssertionError): restarted.search_notes({**args,"namespace":"2"*64})
+            # Edited content must not reuse an old vector, even with a bad version.
+            with self.assertRaises(AssertionError): restarted.search_notes({**args,"items":[{**args["items"][0],"text":"edited"}]})
+            self.assertEqual(restarted.search_notes({**args,"items":[]}),[])
+        self.assertEqual(restarted.notes_conn.execute("SELECT count(*) FROM vectors WHERE namespace=?",("1"*64,)).fetchone()[0],0)
+        # Each model identity uses its own annotation database directory.
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ,{"KNOWLEDGE_DIR":directory,"EMBED_REVISION":"different"}):
+            other = importlib.util.module_from_spec(spec); spec.loader.exec_module(other)
+            self.assertNotEqual(other.IDENTITY,w.IDENTITY)
+            self.assertEqual(other.notes_conn.execute("SELECT count(*) FROM vectors").fetchone()[0],0)
+            other.notes_conn.close(); other.conn.close()
+        restarted.notes_conn.close(); restarted.conn.close()
 
 
 
