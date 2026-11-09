@@ -49,8 +49,9 @@ class EmbeddingConfig:
     @property
     def minimum_similarity(self):
         # The BGE cutoff is not transferable to another embedding distribution.
-        # Remote candidates remain explicitly labelled uncalibrated in status.
-        value = float(os.environ.get("MIN_SEMANTIC_SIMILARITY", "0.65" if self.provider == "fastembed" else "0"))
+        # Small bilingual synthetic check rejects unrelated Voyage hits below
+        # 0.30. This is a provisional floor, never a calibrated confidence score.
+        value = float(os.environ.get("MIN_SEMANTIC_SIMILARITY", "0.65" if self.provider == "fastembed" else "0.30"))
         if not math.isfinite(value) or not -1 <= value <= 1:
             raise ValueError("MIN_SEMANTIC_SIMILARITY must be finite and between -1 and 1")
         return value

@@ -112,12 +112,12 @@ export class KnowledgeService {
   async indexBook(bookId: number): Promise<unknown> {
     const book = await this.client.getBook(bookId);
     const fingerprint = sourceFingerprint(book);
-    const status = await knowledgeWorker.request<IndexStatus>({ op: "status" });
+    const status = await this.worker.request<IndexStatus>({ op: "status" });
     const existing = status.sources.find(
       (source) => source.bookId === bookId && source.fingerprint === fingerprint,
     );
     if (existing) {
-      await knowledgeWorker.request({
+      await this.worker.request({
         op: "job_control",
         bookId,
         action: "complete",
@@ -125,11 +125,31 @@ export class KnowledgeService {
       });
       return { bookId, passages: existing.passages, unchanged: true };
     }
-    await knowledgeWorker.request({ op: "job_control", bookId, action: "start" });
+    await this.worker.request({ op: "job_control", bookId, action: "start" });
     let sections: TextSection[];
     let warnings: unknown = [];
     if (book.files.some((f) => f.format.toLowerCase() === "epub")) {
-      sections = await this.books.getTextSections(bookId);
+      try {
+        sections = await this.books.getTextSections(bookId);
+      } catch (error) {
+        // A native EPUB parser failure must not strand an available PDF. Never
+        // fall back on authentication/authorization errors or network failures.
+        if (
+          !(error instanceof BookOrbitError) ||
+          error.status !== 500 ||
+          !error.path.startsWith(`/epub/${bookId}/`) ||
+          !book.files.some((f) => f.format.toLowerCase() === "pdf")
+        )
+          throw error;
+        const pdf = await this.pdf(bookId);
+        sections = pdf.document.sections;
+        warnings = [
+          "Native EPUB extraction failed (HTTP 500); indexed the authorized PDF copy instead",
+          ...pdf.document.unreadablePages.map(
+            (page) => `Page ${page} has insufficient extractable text`,
+          ),
+        ];
+      }
     } else if (book.files.some((f) => f.format.toLowerCase() === "pdf")) {
       const pdf = await this.pdf(bookId);
       sections = pdf.document.sections;
@@ -438,8 +458,10 @@ export class KnowledgeService {
     });
     rows.sort(
       (a, b) =>
-        b.score * (1 + 0.15 * metadataScore(query, metadata.get(b.book_id) ?? {})) -
-        a.score * (1 + 0.15 * metadataScore(query, metadata.get(a.book_id) ?? {})),
+        b.score *
+          (1 + 0.15 * Math.min(4, metadataScore(query, metadata.get(b.book_id) ?? {}))) -
+        a.score *
+          (1 + 0.15 * Math.min(4, metadataScore(query, metadata.get(a.book_id) ?? {}))),
     );
     const passages = [];
     for (const row of rows.slice(0, opts.limit ?? 10)) {

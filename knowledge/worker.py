@@ -122,16 +122,49 @@ def chunks(data):
             end = min(start + 200, len(words))
             lo, hi = words[start].start(), words[end - 1].end()
             content = text[lo:hi]
-            key = f'{data["bookId"]}:{data["fingerprint"]}:{section["index"]}:{lo}'
-            rows.append({"id": hashlib.sha256(key.encode()).hexdigest(), "book_id": int(data["bookId"]),
+            # Repair inputs that cannot be embedded without changing ordinary
+            # chunk IDs or rebuilding the existing index. PDF layout whitespace
+            # and long Unicode tokens can exceed the provider cap at <200 words.
+            bounded = byte_bounded_spans(content)
+            for offset, part in bounded:
+                part_lo = lo + offset
+                digest = hashlib.sha256(part.encode()).hexdigest()
+                key = f'{data["bookId"]}:{data["fingerprint"]}:{section["index"]}:{part_lo}'
+                if len(content.encode()) > 30_000:
+                    # A shortened passage must never reuse an older staged
+                    # vector with the same start but different embedding input.
+                    key += f':byte-v2:{digest}'
+                rows.append({"id": hashlib.sha256(key.encode()).hexdigest(), "book_id": int(data["bookId"]),
                          "fingerprint": data["fingerprint"], "section": section["index"], "label": section["label"],
-                         "page": section.get("page", 0), "char_start": lo, "char_end": hi, "text": content,
-                         "sha256": hashlib.sha256(content.encode()).hexdigest()})
+                         "page": section.get("page", 0), "char_start": part_lo, "char_end": part_lo + len(part), "text": part,
+                         "sha256": digest})
             if end == len(words):
                 break
     if len(rows) > 25_000:
         raise ValueError("Book exceeds 25000 passage limit")
     return rows
+
+
+def byte_bounded_spans(text, limit=30_000):
+    """Lossless UTF-8 bounds with source offsets; omit whitespace-only spans."""
+    raw = text.encode()
+    offset = 0
+    while raw:
+        end = min(limit, len(raw))
+        while end < len(raw) and raw[end] & 0xC0 == 0x80:
+            end -= 1
+        part = raw[:end].decode()
+        # Prefer a complete word when possible, but split pathological long
+        # tokens rather than truncating or rejecting the rest of the book.
+        if end < len(raw):
+            boundary = max(part.rfind(" "), part.rfind("\n"), part.rfind("\t"))
+            if boundary > len(part) // 2:
+                part = part[:boundary + 1]
+                end = len(part.encode())
+        if part.strip():
+            yield offset, part
+        offset += len(part)
+        raw = raw[end:]
 
 
 def index(data):

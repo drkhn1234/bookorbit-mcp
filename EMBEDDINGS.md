@@ -123,11 +123,36 @@ return. Cross-book retrieval does not bypass permissions. No shared service
 credential or auth/schema change. BookOrbit administrators retain native visibility.
 Books and native metadata remain authoritative and are never rewritten by indexing.
 
-The BGE0.65 similarity threshold is NOT portable. Voyage defaults to0: returned
-semantic hits are explicitly candidates, not proof, and may be irrelevant.
-MIN_SEMANTIC_SIMILARITY is configurable; calibrate from a few real queries rather
-than presenting cosine similarity as confidence. No silent keyword-only fallback
+The BGE0.65 similarity threshold is NOT portable. Voyage defaults to a provisional
+0.30 floor. A small hosted Large/Lite check using four synthetic passages and six
+queries retained English and Turkish science matches (0.48–0.62) and rejected
+programming passages for physics questions (0.19–0.27). This is a starting filter,
+not a corpus-wide evaluation or confidence calibration; some useful matches may
+fall below it. MIN_SEMANTIC_SIMILARITY overrides the floor without reindexing.
+Exact lexical matches remain available independently of semantic similarity.
+Returned hits still require contextual verification. No silent keyword-only fallback
 on provider failure; request fails explicitly, while lexical-only remains usable.
+
+## Retrieval and extraction refinements
+
+Metadata boosts use whole words (prefixes for longer terms), with a bounded boost
+so long queries cannot overwhelm passage ranking. PDF citations include a reader
+link to `/read/<bookId>/<fileId>?page=<physical-page>` and a `read_pdf_pages` action.
+They never substitute print pagination. EPUB citations retain exact `get_passage`
+navigation; extracted character offsets are not browser CFIs.
+
+If native EPUB extraction returns HTTP500 for an EPUB endpoint and that same
+authorized book has a PDF, indexing uses the PDF and reports a warning. It never
+falls back after401/403/404/429 or a network error. Native EPUB parsing is unchanged;
+EPUB-only parser failures still need an upstream fix. Original files are untouched.
+
+Ordinary200-word/40-overlap chunks and IDs remain unchanged. Only passages above
+30000UTF-8 bytes are split further, preserving original character offsets and
+multibyte characters. Whitespace-only fragments are omitted; long tokens are split
+without truncating source text. Repaired IDs include input hashes so older staged
+vectors cannot be reused for different text. Existing indexed books do not rebuild;
+retry only affected failed jobs. These extraction repairs retain the current model
+index identity because previously embeddable passages remain byte-for-byte unchanged.
 
 ## Validation and deployment
 

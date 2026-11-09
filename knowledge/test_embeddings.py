@@ -145,6 +145,13 @@ class RemoteWorkerTests(unittest.TestCase):
                     self.assertEqual(w.search({"query":"fields","allowed":[{"bookId":1,"fingerprint":"c"*64}]}), [])
                 with patch.object(provider.opener, "open", side_effect=AssertionError("Lexical search must not call provider")):
                     self.assertTrue(w.search({"query":"electric","mode":"lexical","allowed":[{"bookId":1,"fingerprint":"a"*64}]}))
+                # Unrelated nearest neighbors must not become evidence simply
+                # because they are the only authorized semantic candidates.
+                weak = io.BytesIO(json.dumps({"data": [{"index":0,
+                    "embedding":[0.2, (1-0.2**2)**0.5]+[0]*1022}]}).encode())
+                with patch.object(provider.opener, "open", return_value=weak):
+                    self.assertEqual(w.search({"query":"unrelated topic","mode":"semantic",
+                        "allowed":[{"bookId":1,"fingerprint":"a"*64}]}), [])
             finally:
                 w.conn.close()
 

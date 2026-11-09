@@ -22,17 +22,17 @@ export function metadataScore(
   },
 ): number {
   const terms = queryTerms(query);
-  const title =
-    `${book.title ?? ""} ${(book.authors ?? []).join(" ")} ${(book.genres ?? []).join(" ")}`.toLowerCase();
-  const description = (book.description ?? "").toLowerCase();
+  const words = (text: string) => text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+  const title = words(
+    `${book.title ?? ""} ${(book.authors ?? []).join(" ")} ${(book.genres ?? []).join(" ")}`,
+  );
+  const description = words(book.description ?? "");
+  const matches = (values: string[], term: string) =>
+    values.some((word) =>
+      term.length >= 7 ? word.startsWith(term.slice(0, 6)) : word === term,
+    );
   return terms.reduce(
-    (score, t) =>
-      score +
-      (title.includes(t.length >= 7 ? t.slice(0, 6) : t)
-        ? 2
-        : description.includes(t.length >= 7 ? t.slice(0, 6) : t)
-          ? 1
-          : 0),
+    (score, t) => score + (matches(title, t) ? 2 : matches(description, t) ? 1 : 0),
     0,
   );
 }
