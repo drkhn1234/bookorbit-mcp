@@ -1,4 +1,8 @@
-> BookOrbit reading/RAG and maintenance extensions: Release 2 is deployed; see [RELEASE2.md](RELEASE2.md), [KNOWLEDGE.md](KNOWLEDGE.md), [RESULTS.md](RESULTS.md) and [CHECKPOINT.md](CHECKPOINT.md). Original upstream documentation follows.
+> This fork adds authenticated HTTP access, permission-aware PDF/EPUB hybrid
+> retrieval, persistent annotation embedding caching and native library maintenance.
+> See [embedding configuration](EMBEDDINGS.md) and the
+> [annotation LanceDB schema](ANNOTATION_SCHEMA.md). The upstream read-only tools
+> below remain available; the descriptions of upstream scope apply to those tools.
 
 # bookorbit-mcp
 

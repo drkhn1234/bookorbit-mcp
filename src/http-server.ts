@@ -17,7 +17,7 @@ import { BookService } from "./book-service.js";
 import { registerTools } from "./tools.js";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
-const PUBLIC_URL = process.env.PUBLIC_URL || "https://books.example.com";
+const PUBLIC_URL = process.env.PUBLIC_URL || `http://127.0.0.1:${PORT}`;
 const BOOKORBIT_URL = process.env.BOOKORBIT_URL || "http://127.0.0.1:3000";
 const CACHE_DIR = process.env.CACHE_DIR || join(homedir(), ".cache", "bookorbit-mcp");
 const DATA_DIR = process.env.OAUTH_DATA_DIR ?? join(process.cwd(), "data");
@@ -271,7 +271,7 @@ function renderLoginPage(
 
       <button type="submit">Authorize & Connect</button>
     </form>
-    <div class="footer">books.example.com &bull; Per-account authentication</div>
+    <div class="footer">BookOrbit &bull; Per-account authentication</div>
   </div>
 </body>
 </html>`;

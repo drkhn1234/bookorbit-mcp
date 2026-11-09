@@ -9,3 +9,19 @@ dist/
 __pycache__/
 *.pyc
 /runtime/
+
+# Private operational records never belong in a public source repository.
+/CHECKPOINT.md
+/RESULTS.md
+/AUTH_FIX_REPORT.md
+/RELEASE1.md
+/RELEASE2.md
+/ROADMAP.md
+/verification/
+/.private/
+/backups/
+*.bundle
+*.pem
+*.key
+.env.*
+!.env.example
