@@ -175,9 +175,27 @@ export class KnowledgeService {
     const status = await this.worker.request<IndexStatus>({ op: "status" });
     const jobs = await this.worker.request<any[]>({ op: "jobs" });
     const active = new Map(status.sources.map((s) => [s.bookId, s]));
-    const supported = catalog.filter((b) =>
-      b.files?.some((f) => ["epub", "pdf"].includes(f.format.toLowerCase())),
-    );
+    const supported: BookListItem[] = [];
+    for (let book of catalog) {
+      if (!book.files?.some((f) => ["epub", "pdf"].includes(f.format.toLowerCase())))
+        continue;
+      // Browse may substitute a filename for a missing title while detail
+      // returns null. Indexing uses detail; a browse mismatch alone must not
+      // keep selecting an already indexed book and starve the rest of the queue.
+      if (
+        active.has(book.id) &&
+        active.get(book.id)!.fingerprint !== sourceFingerprint(book as BookDetail)
+      ) {
+        try {
+          book = await this.client.getBook(book.id);
+        } catch (error) {
+          if (error instanceof BookOrbitError && [403, 404].includes(error.status))
+            continue;
+          throw error;
+        }
+      }
+      supported.push(book);
+    }
     return {
       jobs: jobs.filter((j) => catalog.some((b) => b.id === j.book_id)),
       model: status.model,
@@ -418,17 +436,16 @@ export class KnowledgeService {
             let entry = metadataCache.get(key);
             if (!entry) {
               const detail = await this.client.getBook(candidate.id);
-              if (
-                sourceFingerprint(detail) !== sourceFingerprint(candidate as BookDetail)
-              )
-                continue;
+              // Candidate source identity must come from the same native
+              // detail representation used by indexing and final access checks.
+              Object.assign(candidate, detail);
               entry = {
                 title: detail.title,
                 authors: detail.authors,
                 genres: detail.genres,
                 description: detail.description,
               };
-              metadataCache.set(key, entry);
+              metadataCache.set(`${detail.id}:${sourceFingerprint(detail)}`, entry);
               if (metadataCache.size > 1000)
                 metadataCache.delete(metadataCache.keys().next().value!);
             }

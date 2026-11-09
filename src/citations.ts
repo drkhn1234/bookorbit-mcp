@@ -10,7 +10,7 @@ export function passageCitation(book: BookDetail, row: Passage) {
     passageId: row.id,
     sourceVersion: row.fingerprint,
     bookId: book.id,
-    title: book.title,
+    title: book.title || "Untitled",
     authors: book.authors,
     libraryId: book.libraryId,
     sectionIndex: row.section,

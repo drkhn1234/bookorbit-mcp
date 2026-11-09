@@ -98,3 +98,49 @@ test("native EPUB HTTP 500 can use PDF; permission errors never trigger fallback
   await assert.rejects(service.indexBook(1), /Other native failure/);
   assert.equal(pdfReads, 1);
 });
+
+test("browse filename fallback cannot starve indexing or hide an indexed missing-title book", async () => {
+  const { sourceFingerprint } = await import("../src/book-service.js");
+  const detail: any = { ...book, id: 904, title: null };
+  const browse = { ...detail, title: "filename-fallback" };
+  const fingerprint = sourceFingerprint(detail);
+  const native = {
+    async queryBooks() {
+      return { items: [{ ...browse }], total: 1 };
+    },
+    async getBook() {
+      return detail;
+    },
+  } as unknown as BookOrbitClient;
+  const worker = {
+    async request(data: any): Promise<any> {
+      if (data.op === "jobs") return [];
+      if (data.op === "status")
+        return { sources: [{ bookId: detail.id, fingerprint, passages: 1 }] };
+      if (data.op === "search") {
+        assert.deepEqual(data.allowed, [{ bookId: detail.id, fingerprint }]);
+        return [
+          {
+            id: "p",
+            book_id: detail.id,
+            fingerprint,
+            section: 0,
+            page: 1,
+            text: "Synthetic indexed passage",
+            score: 1,
+            semanticSimilarity: 0.8,
+          },
+        ];
+      }
+      throw new Error("Unexpected worker operation");
+    },
+  };
+  const service = new KnowledgeService(native, {} as BookService, tmpdir(), worker);
+  const status = await service.status();
+  assert.equal(status.indexed, 1);
+  assert.deepEqual(status.pending, []);
+  const result = await service.search("synthetic");
+  assert.equal(result.passages.length, 1);
+  assert.equal(result.passages[0].citation.title, "Untitled");
+  assert.equal(result.passages[0].citation.sourceVersion, fingerprint);
+});

@@ -145,6 +145,10 @@ If native EPUB extraction returns HTTP500 for an EPUB endpoint and that same
 authorized book has a PDF, indexing uses the PDF and reports a warning. It never
 falls back after401/403/404/429 or a network error. Native EPUB parsing is unchanged;
 EPUB-only parser failures still need an upstream fix. Original files are untouched.
+Native browse can substitute a filename where detail returns a missing title.
+Source-version checks resolve such mismatches against current authorized detail,
+so an already indexed book cannot monopolize the queue or disappear from search.
+No metadata is rewritten; missing citation titles are labelled Untitled.
 
 Ordinary200-word/40-overlap chunks and IDs remain unchanged. Only passages above
 30000UTF-8 bytes are split further, preserving original character offsets and
