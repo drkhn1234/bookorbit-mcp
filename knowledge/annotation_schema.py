@@ -1,4 +1,4 @@
-"""Versioned LanceDB contracts for atomic annotations; not wired to production yet.
+"""Versioned LanceDB contracts for the opt-in atomic annotation runtime.
 
 No implicit database access or embedding calls. BookOrbit owns the source records.
 Identity/authorization columns are application-enforced, not database ACLs.
@@ -120,9 +120,9 @@ def authorized_filter(owner_scope, current_books, current_units):
     """
     owner = _hex(owner_scope, 64)
     books = [f"(book_id={_positive(bid)} AND source_version='{_hex(version,64)}')"
-             for bid, version in current_books]
+             for bid, version in dict.fromkeys(current_books)]
     units = [f"(id='{_hex(uid,64)}' AND annotation_version='{_hex(version,64)}')"
-             for uid, version in current_units]
+             for uid, version in dict.fromkeys(current_units)]
     if not books or not units:
         return "false"
     return f"owner_scope='{owner}' AND (" + " OR ".join(books) + ") AND (" + " OR ".join(units) + ")"

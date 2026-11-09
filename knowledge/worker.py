@@ -277,6 +277,25 @@ def search(data):
 notes_conn = sqlite3.connect(DBROOT / "annotations.sqlite3")
 notes_conn.execute("PRAGMA journal_mode=WAL")
 notes_conn.execute("CREATE TABLE IF NOT EXISTS vectors(namespace TEXT, note_id INTEGER, version TEXT, text_hash TEXT, vector TEXT, used REAL, PRIMARY KEY(namespace,note_id))")
+annotation_index = None
+
+
+def atomic_annotations(data):
+    global annotation_index
+    from annotation_index import AnnotationIndex
+    with (DBROOT / "annotation-writer.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if annotation_index is None:
+            annotation_index = AnnotationIndex(DBROOT, EMBEDDING, model, query_vector, table, conn, notes_conn)
+        if data["op"] == "annotation_sync":
+            try: return annotation_index.sync(data)
+            except Exception:
+                annotation_index.failed(data)
+                raise
+        if data["op"] == "annotation_finish": return annotation_index.finish(data)
+        if data["op"] == "annotation_search": return annotation_index.search(data)
+        if data["op"] == "annotation_status": return annotation_index.status(data)
+        raise ValueError("Unknown annotation operation")
 
 
 def search_notes(data):
@@ -366,6 +385,8 @@ def passage(data):
 
 def dispatch(data):
     op = data["op"]
+    if op in ("annotation_sync", "annotation_finish", "annotation_search", "annotation_status"):
+        return atomic_annotations(data)
     if op == "search_notes": return search_notes(data)
     if op == "passage": return passage(data)
     if op == "jobs":

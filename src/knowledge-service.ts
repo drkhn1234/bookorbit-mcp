@@ -1,6 +1,10 @@
 import { pdfMaxBytes } from "./pdf-limits.js";
 import { passageCitation } from "./citations.js";
-import { searchOwnAnnotations } from "./annotation-search.js";
+import {
+  atomicAnnotationIndexEnabled,
+  searchOwnAnnotations,
+  syncOwnAnnotationIndex,
+} from "./annotation-search.js";
 import { metadataScore, queryTerms } from "./retrieval-ranking.js";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
@@ -197,6 +201,12 @@ export class KnowledgeService {
       supported.push(book);
     }
     return {
+      annotations: atomicAnnotationIndexEnabled()
+        ? await this.worker.request({
+            op: "annotation_status",
+            namespace: await this.client.annotationCacheNamespace(),
+          })
+        : { backend: "legacy-sqlite-live-snapshot", scanLimit: 500 },
       jobs: jobs.filter((j) => catalog.some((b) => b.id === j.book_id)),
       model: status.model,
       revision: status.revision,
@@ -404,6 +414,10 @@ export class KnowledgeService {
         (!opts.libraryIds || opts.libraryIds.includes(b.libraryId!)),
     );
     return searchOwnAnnotations(this.client, this.worker, query, catalog, opts);
+  }
+
+  async syncAnnotations() {
+    return syncOwnAnnotationIndex(this.client, this.worker, await this.catalog());
   }
 
   async search(

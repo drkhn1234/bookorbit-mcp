@@ -633,6 +633,7 @@ app.post(["/mcp/messages", "/mcp/u/:username/messages"], async (req, res) => {
 });
 
 let indexing = false;
+const annotationSyncAt = new Map<string, number>();
 async function indexTick(): Promise<void> {
   if (
     indexing ||
@@ -653,6 +654,21 @@ async function indexTick(): Promise<void> {
       const service = new BookService(client, sharedCache);
       const knowledge = new KnowledgeService(client, service, CACHE_DIR, indexingWorker);
       const result = await knowledge.indexPending(3);
+      if (
+        process.env.ANNOTATION_INDEX === "lancedb" &&
+        Date.now() - (annotationSyncAt.get(user.username) ?? 0) >= 300_000
+      ) {
+        // Annotation sync is derived, account-scoped and independently retryable.
+        // Never let a provider failure prevent other users' book indexing.
+        annotationSyncAt.set(user.username, Date.now());
+        try {
+          await knowledge.syncAnnotations();
+        } catch {
+          console.error(
+            "[Index] Annotation sync incomplete; completed units retained for retry",
+          );
+        }
+      }
       madeProgress ||= result.results.some(
         (r) => typeof r === "object" && r !== null && !("error" in r),
       );

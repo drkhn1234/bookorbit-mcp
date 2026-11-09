@@ -85,7 +85,8 @@ and reject individual inputs above30000bytes instead of silently truncating them
 Provider limits may still delay work; this is synchronous batching, not Voyage's
 asynchronous discounted Batch API. Completed batches resume from SQLite staging.
 
-Annotations remain live own-user snapshots with a persistent, account/model-scoped
+In default `ANNOTATION_INDEX=legacy` mode, annotations remain live own-user
+snapshots with a persistent, account/model-scoped
 vector cache in `KNOWLEDGE_DIR/<indexIdentity>/annotations.sqlite3` (mode600).
 Hosted semantic search sends uncached note text and queries to Voyage. The existing
 500-note scan and4000-character embedding limit remain. Reconnects/restarts reuse
@@ -103,6 +104,14 @@ limits bound retention, not search coverage. Cache entries never authorize resul
 fresh own-note snapshots and post-ranking access/version checks remain mandatory.
 Private model caches are covered by normal derived-data backup/permissions policy;
 no new backup schedule was introduced.
+
+Set `ANNOTATION_INDEX=lancedb` for separate atomic highlight/comment embeddings,
+complete native pagination, resumable upserts and verified source-context links.
+The selected model family/dimensions and current book authorization are unchanged.
+Full private annotation text is stored in this derived index; see
+[atomic schema/runtime](ANNOTATION_SCHEMA.md) for retention, bounds and rollback.
+Lexical-only annotation searches do not call the embedding API. Automatic sync uses
+already authenticated accounts and existing external-content consent.
 
 ## Index identity, incremental indexing and recovery
 
