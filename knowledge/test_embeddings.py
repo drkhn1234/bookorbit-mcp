@@ -133,7 +133,7 @@ class RemoteWorkerTests(unittest.TestCase):
                     self.assertTrue(all(r["book_id"] == 1 for r in result))
                     self.assertEqual(calls[-1]["input_type"], "query")
                     self.assertEqual(calls[-1]["model"], "voyage-4-lite")
-                    notes = {"namespace":"12345678-1234-1234-1234-123456789012", "query":"electric fields", "mode":"semantic",
+                    notes = {"namespace":"1"*64, "query":"electric fields", "mode":"semantic",
                              "items":[{"id":7,"version":"own-current","text":"Own synthetic physics note"}]}
                     self.assertEqual(w.search_notes(notes)[0]["id"], 7)
                     self.assertEqual(calls[-1]["input_type"], "document")
