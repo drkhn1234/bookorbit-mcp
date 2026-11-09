@@ -1,3 +1,6 @@
+PDF visual reading, optional column-aware extraction and private exception reports:
+[Reading and maintenance](READING_AND_MAINTENANCE.md).
+
 > This fork adds authenticated HTTP access, permission-aware PDF/EPUB hybrid
 > retrieval, persistent annotation embedding caching and native library maintenance.
 > See [embedding configuration](EMBEDDINGS.md) and the

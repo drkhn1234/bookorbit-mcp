@@ -92,9 +92,16 @@ def extract_pdf(data):
         if start >= len(doc): raise ValueError("Page outside PDF")
         total_pages = len(doc)
         outline = doc.get_toc()
+        from pdf_reading import repeated_margins, layout_text
+        layout_aware = data.get('layoutAware',False)
+        margins = repeated_margins(doc,start,stop) if layout_aware else set()
+        layouts = []
         for index in range(start, stop):
             page = doc[index]
-            text = page.get_text(sort=True)
+            if layout_aware:
+                text,layout=layout_text(page,margins)
+                layouts.append({'page':index+1,**layout})
+            else:text = page.get_text(sort=True)
             if len(text.strip()) < 30:
                 if os.environ.get("PDF_OCR", "1") == "1":
                     try:
@@ -109,7 +116,7 @@ def extract_pdf(data):
             if chars > 25_000_000:
                 raise ValueError("PDF exceeds 25 million extracted characters")
             sections.append({"index": index, "label": f"Page {index + 1}", "page": index + 1, "text": text})
-    return {"contents": [{"level":r[0],"title":r[1],"page":r[2]} for r in outline[:200]], "contentsTruncated":len(outline)>200,"totalPages": total_pages, "sections": sections, "ocrPages": ocr_pages, "unreadablePages": unavailable,
+    return {"layout":layouts,"contents": [{"level":r[0],"title":r[1],"page":r[2]} for r in outline[:200]], "contentsTruncated":len(outline)>200,"totalPages": total_pages, "sections": sections, "ocrPages": ocr_pages, "unreadablePages": unavailable,
             "sha256": hashlib.sha256(raw).hexdigest()}
 
 
@@ -414,6 +421,9 @@ def dispatch(data):
         return {"bookId":bid,"action":action}
     if op in ("pdf", "pdf_window"):
         return extract_pdf(data)
+    if op == 'pdf_images':
+        from pdf_reading import render_pages
+        return render_pages(data,pdf_limit_bytes())
     if op == "index":
         with (DBROOT / "writer.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)

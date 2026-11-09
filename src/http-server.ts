@@ -2,7 +2,15 @@ import { existsSync } from "node:fs";
 import { authenticateBearer } from "./http-auth.js";
 import { KnowledgeService } from "./knowledge-service.js";
 import { indexingWorker, knowledgeWorker } from "./knowledge-worker.js";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  unlink,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import crypto from "node:crypto";
@@ -634,6 +642,7 @@ app.post(["/mcp/messages", "/mcp/u/:username/messages"], async (req, res) => {
 
 let indexing = false;
 const annotationSyncAt = new Map<string, number>();
+const maintenanceReportAt = new Map<string, number>();
 async function indexTick(): Promise<void> {
   if (
     indexing ||
@@ -666,6 +675,33 @@ async function indexTick(): Promise<void> {
         } catch {
           console.error(
             "[Index] Annotation sync incomplete; completed units retained for retry",
+          );
+        }
+      }
+      if (
+        process.env.MAINTENANCE_REPORTS === "1" &&
+        Date.now() - (maintenanceReportAt.get(user.username) ?? 0) >= 3_600_000
+      ) {
+        maintenanceReportAt.set(user.username, Date.now());
+        try {
+          const report = await knowledge.maintenanceReport();
+          const scope = await client.annotationCacheNamespace();
+          const directory = join(CACHE_DIR, "maintenance");
+          await mkdir(directory, { recursive: true, mode: 0o700 });
+          const path = join(directory, `${scope}.json`),
+            temp = `${path}.${crypto.randomUUID()}.tmp`;
+          await writeFile(temp, JSON.stringify(report), { mode: 0o600 });
+          await rename(temp, path);
+          for (const name of await readdir(directory)) {
+            if (
+              /^[a-f0-9]{64}\.json$/.test(name) &&
+              Date.now() - (await stat(join(directory, name))).mtimeMs > 30 * 86400_000
+            )
+              await unlink(join(directory, name));
+          }
+        } catch {
+          console.error(
+            "[Index] Maintenance report incomplete; will retry next interval",
           );
         }
       }

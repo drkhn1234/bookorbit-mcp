@@ -144,3 +144,28 @@ test("browse filename fallback cannot starve indexing or hide an indexed missing
   assert.equal(result.passages[0].citation.title, "Untitled");
   assert.equal(result.passages[0].citation.sourceVersion, fingerprint);
 });
+
+test("PDF images and layout extraction cannot bypass revocation during rendering", async () => {
+  let allowed = true;
+  const native = {
+    async getBook() {
+      if (!allowed) throw new BookOrbitError("Denied", 403, "/books/1");
+      return book;
+    },
+    async downloadFile() {
+      return Buffer.from("synthetic PDF");
+    },
+  } as unknown as BookOrbitClient;
+  const worker = {
+    async request(data: any): Promise<any> {
+      assert.equal(data.op, "pdf_images");
+      allowed = false;
+      return {
+        pages: [{ page: 1, data: "not-returned", mimeType: "image/jpeg" }],
+        totalPages: 1,
+      };
+    },
+  };
+  const service = new KnowledgeService(native, {} as BookService, tmpdir(), worker);
+  await assert.rejects(service.readPdfWindow(1, 1, 1, true), /Denied/);
+});

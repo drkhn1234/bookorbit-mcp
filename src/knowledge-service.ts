@@ -6,6 +6,7 @@ import {
   syncOwnAnnotationIndex,
 } from "./annotation-search.js";
 import { metadataScore, queryTerms } from "./retrieval-ranking.js";
+import { maintenanceReport } from "./maintenance-report.js";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -25,6 +26,8 @@ type PdfDocument = {
   ocrPages: number[];
   unreadablePages: number[];
   sha256: string;
+  totalPages?: number;
+  layout?: { page: number; columns: number; removedMarginBlocks: number }[];
 };
 type IndexStatus = {
   model: string;
@@ -172,6 +175,28 @@ export class KnowledgeService {
       sections,
     });
     return { ...result, warnings };
+  }
+
+  async readPdfWindow(
+    bookId: number,
+    startPage: number,
+    pageCount: number,
+    visual = false,
+  ) {
+    const book = await this.client.getBook(bookId);
+    const file = book.files.find((f) => f.format.toLowerCase() === "pdf");
+    if (!file) throw new Error("Book has no PDF file");
+    const fingerprint = sourceFingerprint(book);
+    const document = await this.worker.request({
+      op: visual ? "pdf_images" : "pdf_window",
+      data: (await this.client.downloadFile(file.id, pdfMaxBytes())).toString("base64"),
+      startPage,
+      pageCount,
+      layoutAware: !visual,
+    });
+    if (sourceFingerprint(await this.client.getBook(bookId)) !== fingerprint)
+      throw new Error("Book changed during PDF reading; retry");
+    return { book, document, fileId: file.id, sourceVersion: fingerprint };
   }
 
   async status() {
@@ -418,6 +443,10 @@ export class KnowledgeService {
 
   async syncAnnotations() {
     return syncOwnAnnotationIndex(this.client, this.worker, await this.catalog());
+  }
+
+  async maintenanceReport() {
+    return maintenanceReport(this.client, await this.catalog(), await this.status());
   }
 
   async search(

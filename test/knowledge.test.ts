@@ -152,7 +152,7 @@ test("actual MCP initializes, discovers extensions and previews/applies native a
   await client.connect(b);
   try {
     const tools = await client.listTools();
-    assert.equal(tools.tools.length, 13);
+    assert.equal(tools.tools.length, 15);
     const invoke = async (args: any) =>
       client.callTool({ name: "library_maintenance", arguments: args });
     const preview = await invoke({
