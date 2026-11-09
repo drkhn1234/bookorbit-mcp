@@ -116,8 +116,11 @@ class AnnotationIndex:
         if len(items)>100:raise ValueError('Atomic sync batch exceeds 100 components')
         prepared=[];errors=[];reused=0
         table=self.table()
-        for row in items:
-            uid=self.validate(owner,row)
+        validated=[(row,self.validate(owner,row)) for row in items]
+        ids=[uid for row,uid in validated]
+        cached_rows={r['id']:r for r in table.search().where(f"owner_scope='{owner}' AND id IN ("+
+            ','.join("'"+uid+"'" for uid in ids)+')').limit(100).to_list()} if ids else {}
+        for row,uid in validated:
             if not row['text'].strip():continue
             error=self.atomic_error(row['text'])
             if error:
@@ -126,7 +129,7 @@ class AnnotationIndex:
                 self.table(LINKS_TABLE).delete(f"owner_scope='{owner}' AND unit_id='{uid}'")
                 continue
             sha=digest(row['text'])
-            cached=table.search().where(f"owner_scope='{owner}' AND id='{uid}'").limit(1).to_list()
+            cached=[cached_rows[uid]] if uid in cached_rows else []
             if cached and all(cached[0][k]==v for k,v in {'annotation_version':row['version'],'source_version':row['sourceVersion'],
                     'library_id':row['libraryId'],'text_sha256':sha}.items()):
                 reused+=1;continue
@@ -176,10 +179,12 @@ class AnnotationIndex:
         records=[v for r,v in prepared]
         table.merge_insert('id').when_matched_update_all().when_not_matched_insert_all().execute(pa.Table.from_pylist(records,schema=table.schema))
         links=self.table(LINKS_TABLE)
+        ids=[v['id'] for row,v in prepared]
+        links.delete(f"owner_scope='{owner}' AND unit_id IN ("+','.join("'"+uid+"'" for uid in ids)+')')
+        records=[]
         for row,value in prepared:
-            links.delete(f"owner_scope='{owner}' AND unit_id='{value['id']}'")
-            records=self.links(owner,row,value['id'])
-            if records:links.add(pa.Table.from_pylist(records,schema=links.schema))
+            records.extend(self.links(owner,row,value['id']))
+        if records:links.add(pa.Table.from_pylist(records,schema=links.schema))
 
     def finish(self,data):
         owner=_hex(data['namespace'],64)
