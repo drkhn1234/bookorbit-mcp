@@ -40,6 +40,14 @@ companions are not enabled by this compose file.
 
 The read-only `bookorbit_mcp.rb` initializer extends the pinned Shelfarr release:
 
+- Authenticates web users on Shelfarr's login screen directly against BookOrbit's
+  credentials API (`POST /api/v1/auth/login`). Synchronizes BookOrbit user ID, username,
+  display name, and role (superusers map to Shelfarr admins, non-superusers map to standard readers).
+  Local passwords in Shelfarr are updated upon successful login to permit seamless offline
+  operation, while local administrator accounts (e.g., recovery) remain accessible via fallback.
+- Strictly guards API token administration in `Current#api_admin?`: an account with web UI
+  admin privileges retains scoped non-admin access for its MCP tokens unless `requests:admin`
+  was explicitly granted to that token.
 - `/api/v1/book_research?work_id=...` exposes existing provider descriptions.
 - `/api/v1/requests/:id/artifact` streams one completed EPUB/PDF, using native
   bearer scope and request-owner checks. Paths are never caller-supplied or returned.

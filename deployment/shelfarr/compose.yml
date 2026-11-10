@@ -12,11 +12,15 @@ services:
       RAILS_MAX_THREADS: "5"
       RAILS_LOG_LEVEL: warn
       BOOKORBIT_DELIVERY_ROOT: /ebooks
+      BOOKORBIT_AUTH_URL: ${BOOKORBIT_AUTH_URL:-http://bookorbit-app:3000/api/v1/auth/login}
     volumes:
       - ./data:/rails/storage
       - ./staging:/ebooks
       - ./downloads:/downloads
       - ./bookorbit_mcp.rb:/rails/config/initializers/bookorbit_mcp.rb:ro
+    networks:
+      - default
+      - bookorbit
     mem_limit: 1536m
     cpus: "0.75"
     healthcheck:
@@ -25,3 +29,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 60s
+
+networks:
+  default:
+  bookorbit:
+    name: bookorbit_default
+    external: true
