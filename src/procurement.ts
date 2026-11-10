@@ -382,6 +382,17 @@ export class ProcurementService {
             job.requestId = matches[0].id;
           }
           const remote = await this.remote(job);
+          if (action === "retry_search") {
+            if (job.bookId)
+              throw new Error(
+                "Already imported; source retry cannot replace a native book",
+              );
+            await this.native.assertLibraryUpload(job.libraryId);
+            await this.json(`/api/v1/requests/${job.requestId}/retry_owned`, "POST", {});
+            job.state = "searching";
+            delete job.error;
+            continue;
+          }
           if (action === "cancel") {
             if (job.bookId)
               throw new Error(
@@ -557,10 +568,12 @@ export function registerProcurementTools(server: McpServer, native: BookOrbitCli
     "procurement_status",
     {
       description:
-        "Track your own acquisition jobs and import completed EPUB/PDFs into their recorded authorized library. Background worker also imports. action=cancel stops a pending request, never deletes imported books. reconcile_import with bookId attaches an existing native book only if destination and artifact hash match an uncertain upload; no blind upload retry. Index readiness is separate in get_index_status.",
+        "Track your own acquisition jobs and import completed EPUB/PDFs into their recorded authorized library. Background worker also imports. cancel stops a pending request, never deletes imported books; retry_search retries an eligible owned source search after failure. reconcile_import with bookId attaches an existing native book only if destination and artifact hash match an uncertain upload; no blind upload retry. Index readiness is separate in get_index_status.",
       inputSchema: {
         jobId: z.string().uuid().optional(),
-        action: z.enum(["status", "cancel", "reconcile_import"]).default("status"),
+        action: z
+          .enum(["status", "cancel", "retry_search", "reconcile_import"])
+          .default("status"),
         bookId: z.number().int().positive().optional(),
       },
       annotations: { readOnlyHint: false, destructiveHint: false },

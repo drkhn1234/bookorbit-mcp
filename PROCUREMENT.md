@@ -32,17 +32,19 @@ Missing ratings or blocked providers are gaps, never fabricated reviews or zeroe
 
 ## Configuration and deployment
 
-`deployment/shelfarr/compose.yml` provides an isolated Shelfarr deployment plus a
-small Project Gutenberg provider. Pin `SHELFARR_IMAGE` to a tested image digest.
+`deployment/shelfarr/compose.yml` provides an isolated Shelfarr deployment.
+Enable its native Project Gutenberg provider. Pin `SHELFARR_IMAGE` to a tested image digest.
 Set PUID/PGID to the service owner's IDs. The web/API port is loopback-only; the
-provider has no host port. Existing BookOrbit libraries are not mounted into either
-container. Audible/store beta companions are not enabled by this compose file.
+Existing BookOrbit libraries are not mounted into the container. Audible/store beta
+companions are not enabled by this compose file.
 
 The read-only `bookorbit_mcp.rb` initializer extends the pinned Shelfarr release:
 
 - `/api/v1/book_research?work_id=...` exposes existing provider descriptions.
 - `/api/v1/requests/:id/artifact` streams one completed EPUB/PDF, using native
   bearer scope and request-owner checks. Paths are never caller-supplied or returned.
+- `/api/v1/requests/:id/retry_owned` retries an eligible owned request with ordinary
+  request-write scope; it never provides cross-user administration.
 
 Artifacts must resolve inside the acquisition output root and be at most 128 MiB.
 Container metadata is inspected before native publication: conflicting titles or
@@ -52,8 +54,8 @@ edition identity; the job records that distinction. No blind upload follows a ho
 Directories with multiple EPUB/PDF files require manual review. Audiobook delivery
 and arbitrary archives are not included in this first version.
 
-Project Gutenberg search uses the public Gutendex catalog, its copyright flag and
-requested language. Acquisitions resolve to fixed Project Gutenberg EPUB URLs.
+Project Gutenberg search uses Shelfarr's native official OPDS catalog and requested
+language. Acquisitions use the official source's release URLs.
 Source availability and applicable access rights still determine what is obtainable.
 Other Shelfarr acquisition providers can be configured separately; no paid source
 account, indexer credential or storefront checkout is assumed. Release selection

@@ -6,6 +6,17 @@ Rails.application.config.to_prepare do
   class API::V1::BookorbitDeliveriesController < API::V1::ApplicationController
     before_action -> { require_scope!("requests:read") }
 
+    def retry_owned
+      return head(:forbidden) unless Current.api_scope?("requests:write")
+      scope = Current.api_admin? ? Request.all : Request.for_user(Current.api_user)
+      acquisition = scope.find(params[:id])
+      return head(:conflict) unless acquisition.can_retry?
+      acquisition.retry_now!
+      render json: { status: acquisition.reload.status }
+    rescue ActiveRecord::RecordNotFound
+      head :not_found
+    end
+
     def show
       scope = Current.api_admin? ? Request.all : Request.for_user(Current.api_user)
       acquisition = scope.includes(:book).find(params[:id])
@@ -51,5 +62,6 @@ end
 
 Rails.application.routes.append do
   get "/api/v1/requests/:id/artifact", to: "api/v1/bookorbit_deliveries#show"
+  post "/api/v1/requests/:id/retry_owned", to: "api/v1/bookorbit_deliveries#retry_owned"
   get "/api/v1/book_research", to: "api/v1/bookorbit_research#show"
 end

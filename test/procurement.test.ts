@@ -281,3 +281,20 @@ test("cancelling a completed but unimported acquisition never publishes or delet
   );
   assert.equal(h.uploadCount(), 0);
 });
+
+test("source retry is explicit, owned and rechecks current upload access", async () => {
+  const h = await setup(),
+    created: any = await h.create();
+  assert.equal(
+    (await h.service.status(created.job.id, "retry_search")).jobs[0].state,
+    "searching",
+  );
+  assert.ok(h.calls.some((c) => c.path.endsWith("/retry_owned")));
+  h.owner("B");
+  await assert.rejects(h.service.status(created.job.id, "retry_search"));
+  h.owner("A");
+  h.revoke();
+  const count = h.calls.filter((c) => c.path.endsWith("/retry_owned")).length;
+  await h.service.status(created.job.id, "retry_search");
+  assert.equal(h.calls.filter((c) => c.path.endsWith("/retry_owned")).length, count);
+});

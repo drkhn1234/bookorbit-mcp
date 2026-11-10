@@ -25,15 +25,3 @@ services:
       timeout: 5s
       retries: 3
       start_period: 60s
-  gutenberg:
-    image: python:3.12-slim
-    restart: unless-stopped
-    command: ["python", "/provider.py"]
-    environment:
-      PYTHONDONTWRITEBYTECODE: "1"
-    volumes:
-      - ./gutenberg.py:/provider.py:ro
-    read_only: true
-    user: "65534:65534"
-    mem_limit: 96m
-    cpus: "0.2"
