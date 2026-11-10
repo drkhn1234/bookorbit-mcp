@@ -29,7 +29,7 @@ import type {
 /** How similar/related books are looked up (GET /books/{id}/...). */
 export type RelatedKind = "similar" | "same_series" | "same_author";
 
-/** Common page/size pagination options for the browse endpoints. */
+/** Common native zero-based page/size options for catalog browse endpoints. */
 export interface PageOpts {
   page?: number;
   size?: number;

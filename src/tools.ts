@@ -23,6 +23,8 @@ const MAX_ANNOTATION_PAGE_SIZE = 100;
 
 /** Default/limit page size for the browse/list tools (series, authors, etc.). */
 const DEFAULT_BROWSE_PAGE_SIZE = 25;
+// Catalog MCP tools present 1-based pages; native BookOrbit catalog routes are
+// 0-based. Translate at the tool boundary and keep response pages 1-based too.
 const MAX_BROWSE_PAGE_SIZE = 100;
 
 /** True when any of a book's files is an EPUB. */
@@ -496,12 +498,12 @@ export function registerTools(
     async ({ page, size }) =>
       guard(async () => {
         const res = await client.listSeries({
-          page,
+          page: (page ?? 1) - 1,
           size: size ?? DEFAULT_BROWSE_PAGE_SIZE,
         });
         return ok({
           total: res.total,
-          page: res.page,
+          page: page ?? 1,
           size: res.size,
           series: res.items.map((s) => ({
             seriesId: s.id,
@@ -537,13 +539,13 @@ export function registerTools(
     async ({ seriesId, page, size }) =>
       guard(async () => {
         const res = await client.getSeriesBooks(seriesId, {
-          page,
+          page: (page ?? 1) - 1,
           size: size ?? DEFAULT_BROWSE_PAGE_SIZE,
         });
         return ok({
           seriesId,
           total: res.total,
-          page: res.page,
+          page: page ?? 1,
           size: res.size,
           books: res.items.map(shapeBookListItem),
         });
@@ -571,12 +573,12 @@ export function registerTools(
     async ({ page, size }) =>
       guard(async () => {
         const res = await client.listAuthors({
-          page,
+          page: (page ?? 1) - 1,
           size: size ?? DEFAULT_BROWSE_PAGE_SIZE,
         });
         return ok({
           total: res.total,
-          page: res.page,
+          page: page ?? 1,
           size: res.size,
           authors: res.items.map((a) => ({
             authorId: a.id,
@@ -634,13 +636,13 @@ export function registerTools(
     async ({ authorId, page, size }) =>
       guard(async () => {
         const res = await client.getAuthorBooks(authorId, {
-          page,
+          page: (page ?? 1) - 1,
           size: size ?? DEFAULT_BROWSE_PAGE_SIZE,
         });
         return ok({
           authorId,
           total: res.total,
-          page: res.page,
+          page: page ?? 1,
           size: res.size,
           books: res.items.map(shapeBookListItem),
         });
@@ -693,7 +695,7 @@ export function registerTools(
     async ({ collectionId, page, size, q, collapseSeries }) =>
       guard(async () => {
         const res = await client.getCollectionBooks(collectionId, {
-          page: page ?? 1,
+          page: (page ?? 1) - 1,
           size: size ?? DEFAULT_BROWSE_PAGE_SIZE,
           q,
           collapseSeries,
@@ -701,7 +703,7 @@ export function registerTools(
         return ok({
           collectionId,
           total: res.total,
-          page: res.page,
+          page: page ?? 1,
           size: res.size,
           books: res.items.map(shapeBookListItem),
         });
@@ -750,14 +752,14 @@ export function registerTools(
     async ({ scopeId, page, size, q }) =>
       guard(async () => {
         const res = await client.getSmartScopeBooks(scopeId, {
-          page: page ?? 1,
+          page: (page ?? 1) - 1,
           size: size ?? DEFAULT_BROWSE_PAGE_SIZE,
           q,
         });
         return ok({
           scopeId,
           total: res.total,
-          page: res.page,
+          page: page ?? 1,
           size: res.size,
           books: res.items.map(shapeBookListItem),
         });
