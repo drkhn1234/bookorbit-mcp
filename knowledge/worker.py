@@ -391,6 +391,9 @@ def passage(data):
 
 
 def dispatch(data):
+    if data.get("op") == "inspect_acquisition":
+        from acquisition import inspect_artifact
+        return inspect_artifact(data)
     op = data["op"]
     if op in ("annotation_sync", "annotation_finish", "annotation_search", "annotation_status"):
         return atomic_annotations(data)

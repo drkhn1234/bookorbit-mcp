@@ -8,6 +8,7 @@ import { sourceFingerprint, type BookService } from "./book-service.js";
 import { indexingWorker, knowledgeWorker } from "./knowledge-worker.js";
 import { KnowledgeService } from "./knowledge-service.js";
 import { registerOrganizationTools } from "./organization.js";
+import { registerProcurementTools } from "./procurement.js";
 
 const id = z.number().int().positive();
 const readOnly = { readOnlyHint: true, destructiveHint: false, openWorldHint: false };
@@ -30,6 +31,7 @@ export function registerExtendedTools(
   books: BookService,
 ) {
   registerOrganizationTools(server, client);
+  if (process.env.SHELFARR_CONFIG_FILE) registerProcurementTools(server, client);
   const knowledge = new KnowledgeService(
     client,
     books,

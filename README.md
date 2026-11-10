@@ -4,6 +4,9 @@ PDF visual reading, optional column-aware extraction and private exception repor
 Create collections and rule-based smart scopes through authenticated MCP tools:
 [AI-assisted organization](ORGANIZATION.md).
 
+Optional external discovery, research and per-user acquisition through Shelfarr:
+[Procurement](PROCUREMENT.md).
+
 > This fork adds authenticated HTTP access, permission-aware PDF/EPUB hybrid
 > retrieval, persistent annotation embedding caching and native library maintenance.
 > See [embedding configuration](EMBEDDINGS.md) and the

@@ -23,6 +23,7 @@ import { UserClientPool } from "./user-client-pool.js";
 import { BookCache } from "./cache.js";
 import { BookService } from "./book-service.js";
 import { registerTools } from "./tools.js";
+import { ProcurementService } from "./procurement.js";
 
 const PORT = parseInt(process.env.PORT || "3001", 10);
 const PUBLIC_URL = process.env.PUBLIC_URL || `http://127.0.0.1:${PORT}`;
@@ -643,6 +644,29 @@ app.post(["/mcp/messages", "/mcp/u/:username/messages"], async (req, res) => {
 let indexing = false;
 const annotationSyncAt = new Map<string, number>();
 const maintenanceReportAt = new Map<string, number>();
+let procurementRunning = false;
+async function procurementTick(): Promise<void> {
+  if (procurementRunning || !process.env.SHELFARR_CONFIG_FILE) return;
+  procurementRunning = true;
+  try {
+    const users = new Map(
+      Object.values(oauthData.tokens)
+        .filter((t) => t.expiresAt > Date.now() && t.password)
+        .map((t) => [t.username, t]),
+    );
+    for (const user of users.values()) {
+      try {
+        await new ProcurementService(userClients.get(user)).status();
+      } catch {
+        console.error(
+          "[Acquisition] Poll incomplete; will retry with current native authentication",
+        );
+      }
+    }
+  } finally {
+    procurementRunning = false;
+  }
+}
 async function indexTick(): Promise<void> {
   if (
     indexing ||
@@ -726,6 +750,7 @@ async function main(): Promise<void> {
   await loadOAuthData();
   process.umask(0o077);
   setTimeout(() => void indexTick(), 15_000).unref();
+  setInterval(() => void procurementTick(), 30_000).unref();
   process.once("exit", () => {
     knowledgeWorker.close();
     indexingWorker.close();

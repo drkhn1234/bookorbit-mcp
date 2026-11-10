@@ -94,6 +94,31 @@ export class BookOrbitClient {
       .digest("hex");
   }
 
+  async assertLibraryUpload(libraryId: number): Promise<void> {
+    const user = await this.getJson<{ isSuperuser?: boolean; permissions?: string[] }>(
+      "/auth/me",
+    );
+    if (!user.isSuperuser && !user.permissions?.includes("library_upload"))
+      throw new Error("Native BookOrbit upload permission is required");
+    await this.queryBooks(0, 1, libraryId);
+  }
+
+  async uploadBook(
+    libraryId: number,
+    content: Buffer,
+    filename: string,
+  ): Promise<{ bookId: number }> {
+    await this.assertLibraryUpload(libraryId);
+    const form = new FormData();
+    form.append("file", new Blob([new Uint8Array(content)]), filename);
+    const response = await this.authFetch(`/libraries/${libraryId}/upload`, {
+      method: "POST",
+      body: form,
+      signal: AbortSignal.timeout(180_000),
+    });
+    return response.json() as Promise<{ bookId: number }>;
+  }
+
   async searchBooks(query: string, limit?: number): Promise<BookSearchResult[]> {
     const params = new URLSearchParams({ q: query });
     if (limit != null) params.set("limit", String(limit));
