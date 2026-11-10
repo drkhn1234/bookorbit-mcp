@@ -1,6 +1,9 @@
 PDF visual reading, optional column-aware extraction and private exception reports:
 [Reading and maintenance](READING_AND_MAINTENANCE.md).
 
+Create collections and rule-based smart scopes through authenticated MCP tools:
+[AI-assisted organization](ORGANIZATION.md).
+
 > This fork adds authenticated HTTP access, permission-aware PDF/EPUB hybrid
 > retrieval, persistent annotation embedding caching and native library maintenance.
 > See [embedding configuration](EMBEDDINGS.md) and the

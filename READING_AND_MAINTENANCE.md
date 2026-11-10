@@ -2,7 +2,8 @@
 
 The existing native authorization and retrieval tools remain available. Two
 additional read-only tools provide bounded visual reading and exception reporting.
-The server exposes48tools when BOOKORBIT_EXTENSIONS=1 (33upstream +15extensions).
+The server exposes51tools when BOOKORBIT_EXTENSIONS=1 (33upstream +18extensions).
+See [AI-assisted organization](ORGANIZATION.md) for collection and smart-scope writes.
 
 ## Read equations, diagrams and difficult layouts
 

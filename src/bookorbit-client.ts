@@ -215,6 +215,56 @@ export class BookOrbitClient {
     return this.getJson<NamedShelf[]>(`/smart-scopes`);
   }
 
+  async getSmartScope(id: number): Promise<NamedShelf> {
+    return this.getJson(`/smart-scopes/${id}`);
+  }
+
+  /** Native shelf writes: authorization and ownership remain upstream. */
+  async createShelf(
+    kind: "collections" | "smart-scopes",
+    body: unknown,
+  ): Promise<NamedShelf> {
+    return this.sendJson(`/${kind}`, "POST", body);
+  }
+
+  async updateShelf(
+    kind: "collections" | "smart-scopes",
+    id: number,
+    body: unknown,
+  ): Promise<NamedShelf> {
+    return this.sendJson(`/${kind}/${id}`, "PATCH", body);
+  }
+
+  async deleteShelf(kind: "collections" | "smart-scopes", id: number): Promise<void> {
+    return this.sendJson(`/${kind}/${id}`, "DELETE", {});
+  }
+
+  async changeCollectionBooks(
+    id: number,
+    action: "add_books" | "remove_books",
+    bookIds: number[],
+  ): Promise<NamedShelf> {
+    return this.sendJson(
+      `/collections/${id}/books`,
+      action === "add_books" ? "POST" : "DELETE",
+      { bookIds },
+    );
+  }
+
+  async collectionMembership(bookIds: number[]): Promise<NamedShelf[]> {
+    return this.getJson(
+      `/collections?${new URLSearchParams({ bookIds: bookIds.join(",") })}`,
+    );
+  }
+
+  async previewScope(filter: unknown, sort: unknown): Promise<Paged<BookListItem>> {
+    return this.sendJson("/books/query", "POST", {
+      filter,
+      sort,
+      pagination: { page: 0, size: 10 },
+    });
+  }
+
   /** A page of the books matched by one smart scope. */
   async getSmartScopeBooks(
     scopeId: number,
