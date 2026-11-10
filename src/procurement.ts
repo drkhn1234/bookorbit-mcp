@@ -34,6 +34,21 @@ const digest = (v: unknown) =>
 const workIdSchema = z
   .string()
   .regex(/^(openlibrary|hardcover|google_books):[A-Za-z0-9_-]{1,100}$/);
+
+// Native upload may derive the display title from the filename. Use the
+// inspected book title and keep it a bounded leaf, never a path or job UUID.
+function uploadFilename(title: string, format: "epub" | "pdf"): string {
+  const clean = title
+    .normalize("NFC")
+    .replace(/[\\/:*?"<>|\p{Cc}]/gu, " ")
+    .replace(/^[.\s]+|[.\s]+$/g, "");
+  let leaf = "";
+  for (const char of clean) {
+    if (Buffer.byteLength(leaf + char) > 180) break;
+    leaf += char;
+  }
+  return `${leaf.trim() || "Acquired book"}.${format}`;
+}
 // One serialized ledger/import writer per MCP process. Native data remains authoritative.
 let serial: Promise<unknown> = Promise.resolve();
 async function readBounded(response: Response, limit: number): Promise<Buffer> {
@@ -416,13 +431,21 @@ export class ProcurementService {
             const bytes = await readBounded(response, 128 * 1024 * 1024),
               pdf = bytes.subarray(0, 5).toString() === "%PDF-",
               epub = bytes[0] === 80 && bytes[1] === 75;
-            if (!pdf && !epub) throw new Error("Artifact is not an EPUB/PDF container");
-            const verification = await this.inspect({
-              op: "inspect_acquisition",
-              data: bytes.toString("base64"),
-              title: job.title,
-              author: job.author,
-            });
+            let verification;
+            try {
+              if (!pdf && !epub) throw new Error("Not EPUB/PDF");
+              verification = await this.inspect({
+                op: "inspect_acquisition",
+                data: bytes.toString("base64"),
+                title: job.title,
+                author: job.author,
+              });
+            } catch {
+              job.state = "needs_review";
+              job.error =
+                "Artifact could not be validated as a readable EPUB/PDF; no native book was published";
+              continue;
+            }
             job.verification = {
               metadataMatch: verification.metadataMatch,
               editionVerified: false,
@@ -442,7 +465,7 @@ export class ProcurementService {
             const uploaded = await this.native.uploadBook(
               job.libraryId,
               bytes,
-              `acquisition-${job.id}.${pdf ? "pdf" : "epub"}`,
+              uploadFilename(verification.title || job.title, pdf ? "pdf" : "epub"),
             );
             if (!Number.isSafeInteger(uploaded.bookId))
               throw new Error("Import response has no book identity");

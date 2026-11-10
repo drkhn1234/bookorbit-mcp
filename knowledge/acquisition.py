@@ -22,8 +22,8 @@ def inspect_artifact(data):
             if doc.is_encrypted:
                 raise ValueError("Encrypted PDF requires review")
             metadata = doc.metadata or {}
-            title = metadata.get("title", "")
-            authors = [metadata.get("author", "")]
+            title = metadata.get("title") or ""
+            authors = [metadata.get("author") or ""]
     else:
         with zipfile.ZipFile(io.BytesIO(raw)) as archive:
             def xml(path):

@@ -28,6 +28,7 @@ async function setup() {
   let metadataMatch = "verified";
   const requests = new Map<number, any>();
   const calls: any[] = [];
+  const filenames: string[] = [];
   const native = {
     async annotationCacheNamespace() {
       return owner;
@@ -38,8 +39,9 @@ async function setup() {
     async getCollection() {
       return { id: 4, name: "Study", isOwner: true };
     },
-    async uploadBook() {
+    async uploadBook(_libraryId: number, _bytes: Buffer, filename: string) {
       uploads++;
+      filenames.push(filename);
       if (failUpload) throw new Error("Upload response lost");
       return { bookId: 55 };
     },
@@ -134,6 +136,7 @@ async function setup() {
     input,
     create,
     calls,
+    filenames,
     config,
     dir,
     uploadCount: () => uploads,
@@ -198,6 +201,7 @@ test("completion imports once, persists across new service sessions and preserve
   assert.equal(done.jobs[0].state, "imported");
   await h.service.status(created.job.id);
   assert.equal(h.uploadCount(), 1);
+  assert.deepEqual(h.filenames, ["Book.epub"]);
   const saved = JSON.parse(await readFile(join(h.dir, "jobs", "A.json"), "utf8"));
   assert.equal(saved[0].bookId, 55);
   assert.equal(saved[0].sha256.length, 64);
