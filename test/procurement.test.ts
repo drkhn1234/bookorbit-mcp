@@ -77,11 +77,61 @@ async function setup() {
     calls.push({ path, method: init.method, actor });
     const json = (v: unknown, status = 200) =>
       new Response(JSON.stringify(v), { status });
+    if (path === "/api/v1/sources")
+      return json({
+        acquisition_sources: [
+          {
+            id: "gutenberg",
+            name: "Project Gutenberg",
+            type: "direct",
+            protocol: "direct",
+            enabled: true,
+            supported_types: ["ebook"],
+          },
+          {
+            id: "anna_archive",
+            name: "Anna's Archive",
+            type: "direct",
+            protocol: "direct",
+            enabled: true,
+            supported_types: ["ebook"],
+          },
+        ],
+        metadata_sources: [
+          {
+            id: "openlibrary",
+            name: "Open Library",
+            status: "healthy",
+            priority_rank: 0,
+          },
+        ],
+        store_providers: [
+          { key: "ebooks_com", name: "eBooks.com", configured: true },
+        ],
+        download_preferences: {
+          preferred_download_types: ["torrent", "usenet", "direct"],
+        },
+      });
     if (path === "/api/v1/search")
-      return json({ results: [{ work_id: "openlibrary:OL1W", title: "Book" }] });
+      return json({
+        results: [
+          {
+            work_id: "openlibrary:OL1W",
+            title: "Book",
+            source: "openlibrary",
+            source_name: "Open Library",
+          },
+        ],
+      });
     if (path === "/api/v1/book_research")
       return json({
+        work_id: "openlibrary:OL1W",
+        title: "Book",
         description: "Verified provider description",
+        source: "openlibrary",
+        source_name: "Open Library",
+        source_url: "https://openlibrary.org/works/OL1W",
+        source_attribution: "Metadata from Open Library",
         review_text_available: false,
       });
     if (path === "/api/v1/requests") {
@@ -107,9 +157,40 @@ async function setup() {
     if (path.endsWith("/artifact"))
       return new Response(Buffer.from([80, 75, 3, 4, 0, 0]));
     if (path.endsWith("/search_results"))
-      return json({ search_results: [{ id: 1, title: "EPUB" }], store_offers: [] });
+      return json({
+        search_results: [
+          {
+            id: 1,
+            title: "EPUB",
+            source: "gutenberg",
+            source_name: "Project Gutenberg",
+            protocol: "direct",
+            format: "epub",
+            size_bytes: 2097152,
+            size_human: "2.0 MB",
+            confidence_score: 95,
+            confidence_level: "high",
+            downloadable: true,
+            status: "pending",
+          },
+        ],
+        store_offers: [],
+      });
     if (init.method === "DELETE") return json({ ...r, status: "failed" });
-    return json({ ...r, status: completed ? "completed" : r.status });
+    const selectedRelease = {
+      id: 1,
+      title: "EPUB",
+      source: "gutenberg",
+      source_name: "Project Gutenberg",
+      indexer: "Project Gutenberg",
+      protocol: "direct",
+      format: "epub",
+    };
+    return json({
+      ...r,
+      status: completed ? "completed" : r.status,
+      selected_release: selectedRelease,
+    });
   }) as typeof fetch;
   const service = new ProcurementService(
     native,
@@ -301,4 +382,51 @@ test("source retry is explicit, owned and rechecks current upload access", async
   const count = h.calls.filter((c) => c.path.endsWith("/retry_owned")).length;
   await h.service.status(created.job.id, "retry_search");
   assert.equal(h.calls.filter((c) => c.path.endsWith("/retry_owned")).length, count);
+});
+
+test("sources endpoint, discovery summary, release provenance and job tracking expose source discernment", async () => {
+  const h = await setup();
+
+  // 1. Sources overview
+  const sources = await h.service.sources();
+  assert.equal(sources.acquisitionSources.length, 2);
+  assert.equal(sources.acquisitionSources[0].name, "Project Gutenberg");
+  assert.equal(sources.acquisitionSources[0].protocol, "direct");
+  assert.equal(sources.metadataSources.length, 1);
+  assert.equal(sources.metadataSources[0].name, "Open Library");
+  assert.ok(sources.discernmentNote.includes("Acquisition sources"));
+
+  // 2. Discover sources summary
+  const discovery = await h.service.discover("Book", 5);
+  assert.equal(discovery.candidates.length, 1);
+  assert.deepEqual(discovery.sourcesSummary, ["Open Library"]);
+
+  // 3. Research source provenance
+  const research = await h.service.research("openlibrary:OL1W", "Book");
+  assert.equal(research.sourceProvenance?.source, "openlibrary");
+  assert.equal(research.sourceProvenance?.sourceName, "Open Library");
+  assert.equal(
+    research.sourceProvenance?.sourceUrl,
+    "https://openlibrary.org/works/OL1W",
+  );
+
+  // 4. Release source discernment & selection
+  const created: any = await h.create();
+  const releases = await h.service.releases(created.job.id);
+  assert.equal(releases.releases.length, 1);
+  assert.equal(releases.releases[0].sourceName, "Project Gutenberg");
+  assert.equal(releases.releases[0].protocol, "direct");
+  assert.equal(releases.releases[0].format, "epub");
+  assert.equal(releases.releases[0].sizeHuman, "2.0 MB");
+  assert.equal(releases.releases[0].confidenceLevel, "high");
+  assert.deepEqual(releases.sourcesSummary, ["Project Gutenberg (direct)"]);
+
+  // Grab release 1 -> verifies job records source
+  await h.service.releases(created.job.id, 1);
+  const statusAfterGrab = await h.service.status(created.job.id);
+  assert.equal(statusAfterGrab.jobs[0].source, "gutenberg");
+  assert.equal(statusAfterGrab.jobs[0].sourceName, "Project Gutenberg");
+  assert.equal(statusAfterGrab.jobs[0].protocol, "direct");
+  assert.equal(statusAfterGrab.jobs[0].format, "epub");
+  assert.equal(statusAfterGrab.jobs[0].releaseTitle, "EPUB");
 });

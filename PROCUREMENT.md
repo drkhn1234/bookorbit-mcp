@@ -1,6 +1,6 @@
 # Shelfarr acquisition through MCP
 
-The optional acquisition integration adds five tools to the existing 51 tools.
+The optional acquisition integration adds six tools to the existing 51 tools.
 Enable it with `SHELFARR_CONFIG_FILE`; without that setting the existing server is
 unchanged. BookOrbit remains the catalog, authorization and final library-storage
 authority. Shelfarr owns source search, release selection, downloads and its queue.
@@ -8,11 +8,12 @@ Existing Voyage/LanceDB indexing handles imported books.
 
 | Tool | Purpose |
 | --- | --- |
-| `discover_books` | External catalog search plus matches from only your accessible BookOrbit catalog. |
-| `research_book` | Descriptions, source links and configured native metadata-provider candidates, including available aggregate ratings. |
+| `get_procurement_sources` | Inspect configured and available acquisition sources (e.g. Gutenberg, Anna's Archive, Z-Library, indexers), metadata providers (Open Library, Google Books, Hardcover) and commercial store offers. |
+| `discover_books` | External catalog search plus matches from only your accessible BookOrbit catalog, surfacing candidate metadata source provenance. |
+| `research_book` | Descriptions, source links, provider provenance and configured native metadata-provider candidates, including available aggregate ratings. |
 | `procure_book` | Preview then queue a selected ebook into an explicit authorized library, optionally an owned collection. |
-| `find_book_releases` | Inspect available releases/purchase offers; optionally select a result to download. |
-| `procurement_status` | Own job state, completed-file import, cancellation and hash-verified reconciliation. |
+| `find_book_releases` | Inspect available releases with source provenance (provider/indexer, download protocol, format, size, quality score) and purchase offers; optionally select a result to download. |
+| `procurement_status` | Track job state, source provenance of chosen releases, completed-file import, cancellation and hash-verified reconciliation. |
 
 Example client instructions:
 
@@ -20,8 +21,12 @@ Example client instructions:
 > library, research descriptions and ratings, and explain the best matches with
 > sources. Do not request anything yet.
 
+> What sources does the system have configured to discover and download books?
+> Explain where public domain vs copyrighted releases are obtained.
+
 > Request the chosen work as an English ebook into library 12, then show available
-> releases. Use the existing “Exam preparation” collection if I own it.
+> releases. Explain where each release originates (Gutenberg, shadow library, or torrent tracker)
+> and its protocol and format. Use the existing “Exam preparation” collection if I own it.
 
 The AI client interprets conceptual questions and may translate them into several
 catalog searches. External discovery is not semantic full-text search of books you
@@ -29,6 +34,32 @@ do not possess. Individual Goodreads/Amazon comments are not fetched by this
 integration: use client web research where available. Metadata candidates are not
 proof of edition identity; preserve source/ISBN/author and rating provenance.
 Missing ratings or blocked providers are gaps, never fabricated reviews or zeroes.
+
+### Source Discernment & Provenance
+
+The AI can discern source information across all procurement stages:
+
+- **Source Overview (`get_procurement_sources`)**:
+  - Acquisition sources: Direct downloads (Project Gutenberg for public domain OPDS, Anna's Archive, Z-Library, LibriVox audiobooks), BitTorrent / Usenet indexers (Prowlarr, Jackett), and custom external providers. Exposes protocols (`direct`, `torrent`, `usenet`), enabled status, and supported book types (`ebook`, `audiobook`, `comicbook`).
+  - Metadata providers: Hardcover, Open Library, Google Books, and Comic Vine. Exposes priority ranking, rate-limiting status, and identifier prefixes (e.g., `openlibrary:`, `google_books:`, `hardcover:`).
+  - Commercial storefronts: DRM-free store offers (eBooks.com, etc.).
+  - Download preferences: Configured order of preferred protocols (e.g., `["torrent", "usenet", "direct"]`).
+
+- **Discovery Provenance (`discover_books`)**:
+  - Returns `sourcesSummary` summarizing the bibliographic sources contributing to candidate results (e.g., `["Open Library", "Hardcover"]`).
+  - Each candidate carries `source`, `source_name`, `source_url`, and `sources` array for multi-provider aggregated works.
+
+- **Research Provenance (`research_book`)**:
+  - Exposes `sourceProvenance` with the authoritative metadata source name, canonical URL, and provider attribution.
+  - Returns candidate metadata enriched by configured BookOrbit providers with respective provider keys and source links.
+
+- **Release Provenance (`find_book_releases`)**:
+  - Each release item includes `source` (provider identifier), `sourceName` (display name, e.g. "Project Gutenberg", "Anna's Archive", "Z-Library", or tracker name), `indexer` (originating tracker/indexer), `protocol` (`direct`, `torrent`, `usenet`), `format` (file extension like `epub` or `pdf`), `detectedExtensions`, `sizeBytes`, `sizeHuman` (e.g. `2.0 MB`), `confidenceScore`, `confidenceLevel` (`high`, `medium`, `low`), and `infoUrl`.
+  - Returns `sourcesSummary` listing all distinct sources and protocols found for the work.
+
+- **Job Tracking & Provenance (`procurement_status`)**:
+  - Persists and surfaces the chosen release source (`source`, `sourceName`, `indexer`, `protocol`, `format`, `releaseTitle`) across status polling and import.
+  - When imported into BookOrbit, the source provenance is retained alongside the verified artifact hash and destination library.
 
 ## Configuration and deployment
 

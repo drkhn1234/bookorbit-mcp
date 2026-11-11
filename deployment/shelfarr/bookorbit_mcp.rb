@@ -140,10 +140,48 @@ module BookorbitCurrentPatch
   end
 end
 
+# Enriched provenance and source metadata for search results and request payloads
+module BookorbitRequestsExtension
+  def search_result_payload(result)
+    payload = super(result)
+    payload.merge(
+      source_name: result.source_display_name,
+      protocol: result.download_type,
+      format: result.primary_extension,
+      detected_extensions: result.detected_extensions,
+      size_human: result.size_human,
+      confidence_level: result.confidence_level,
+      language_name: result.language_display_name,
+      info_url: result.info_url.presence,
+      acquisition_provider_name: result.acquisition_provider&.name
+    )
+  end
+
+  def request_payload(request)
+    payload = super(request)
+    selected = request.search_results.selected.first || request.downloads.first&.search_result
+    if selected
+      payload[:selected_release] = {
+        id: selected.id,
+        title: selected.title,
+        source: selected.source,
+        source_name: selected.source_display_name,
+        indexer: selected.indexer,
+        protocol: selected.download_type,
+        format: selected.primary_extension,
+        size_bytes: selected.size_bytes,
+        size_human: selected.size_human
+      }
+    end
+    payload
+  end
+end
+
 # Pinned-version extensions for BookOrbit MCP and Authentication
 Rails.application.config.to_prepare do
   SessionsController.prepend(BookorbitSessionsExtension) unless SessionsController.ancestors.include?(BookorbitSessionsExtension)
   Current.prepend(BookorbitCurrentPatch) unless Current.ancestors.include?(BookorbitCurrentPatch)
+  API::V1::RequestsController.prepend(BookorbitRequestsExtension) unless API::V1::RequestsController.ancestors.include?(BookorbitRequestsExtension)
 
   class API::V1::BookorbitDeliveriesController < API::V1::ApplicationController
     before_action -> { require_scope!("requests:read") }
@@ -193,11 +231,181 @@ Rails.application.config.to_prepare do
       work_id = params[:work_id].to_s
       return head(:bad_request) unless work_id.match?(/\A(?:openlibrary|google_books|hardcover):[A-Za-z0-9_-]{1,100}\z/)
       details = MetadataService.book_details(work_id)
-      render json: { work_id: work_id, title: details.title, author: details.author,
-        description: details.description.to_s.truncate(12_000), source_url: details.source_url,
-        review_text_available: false }
-    rescue StandardError
-      render json: { errors: ["Metadata details unavailable"] }, status: :bad_gateway
+      render json: {
+        work_id: work_id,
+        title: details.title,
+        author: details.author,
+        description: details.description.to_s.truncate(12_000),
+        source: details.respond_to?(:source) ? details.source : nil,
+        source_name: details.respond_to?(:source_name) ? details.source_name : nil,
+        source_url: details.source_url,
+        source_attribution: details.respond_to?(:source_attribution) ? details.source_attribution : nil,
+        cover_url: details.respond_to?(:cover_url) ? details.cover_url : nil,
+        year: details.respond_to?(:year) ? details.year : (details.respond_to?(:first_publish_year) ? details.first_publish_year : nil),
+        review_text_available: false
+      }
+    rescue StandardError => e
+      render json: { errors: ["Metadata details unavailable: #{e.message}"] }, status: :bad_gateway
+    end
+  end
+
+  class API::V1::BookorbitSourcesController < API::V1::ApplicationController
+    before_action -> { require_scope!("search:read") }
+
+    def index
+      render json: {
+        acquisition_sources: acquisition_sources_payload,
+        metadata_sources: metadata_sources_payload,
+        store_providers: store_providers_payload,
+        download_preferences: {
+          preferred_download_types: SettingsService.preferred_download_types
+        }
+      }
+    end
+
+    private
+
+    def acquisition_sources_payload
+      sources = []
+
+      sources << {
+        id: "gutenberg",
+        name: "Project Gutenberg",
+        type: "direct",
+        protocol: "direct",
+        enabled: SettingsService.get(:gutenberg_enabled) == true,
+        supported_types: ["ebook"],
+        url: SettingsService.get(:gutenberg_url).presence || "https://www.gutenberg.org",
+        description: "Public domain books via native OPDS catalog and direct HTTP download"
+      }
+
+      sources << {
+        id: "anna_archive",
+        name: "Anna's Archive",
+        type: "direct",
+        protocol: "direct",
+        enabled: SettingsService.get(:anna_archive_enabled) == true,
+        supported_types: ["ebook", "comicbook"],
+        description: "Open shadow library search and direct download mirrors"
+      }
+
+      sources << {
+        id: "zlibrary",
+        name: "Z-Library",
+        type: "direct",
+        protocol: "direct",
+        enabled: SettingsService.get(:zlibrary_enabled) == true,
+        supported_types: ["ebook"],
+        description: "Direct ebook downloads via Z-Library Remix user API"
+      }
+
+      sources << {
+        id: "librivox",
+        name: "LibriVox",
+        type: "direct",
+        protocol: "direct",
+        enabled: true,
+        supported_types: ["audiobook"],
+        description: "Public domain audiobooks via direct download"
+      }
+
+      prowlarr_configured = SettingsService.get(:prowlarr_url).present?
+      sources << {
+        id: "prowlarr",
+        name: "Prowlarr",
+        type: "indexer",
+        protocol: "torrent",
+        enabled: prowlarr_configured,
+        supported_types: ["ebook", "audiobook", "comicbook"],
+        description: "Aggregated BitTorrent and Usenet indexers managed through Prowlarr"
+      }
+
+      jackett_configured = SettingsService.get(:jackett_url).present?
+      sources << {
+        id: "jackett",
+        name: "Jackett",
+        type: "indexer",
+        protocol: "torrent",
+        enabled: jackett_configured,
+        supported_types: ["ebook", "audiobook", "comicbook"],
+        description: "Torznab torrent trackers managed through Jackett"
+      }
+
+      AcquisitionProvider.all.each do |provider|
+        sources << {
+          id: "custom_#{provider.id}",
+          name: provider.name,
+          type: "custom",
+          protocol: "direct",
+          enabled: provider.enabled?,
+          priority: provider.priority,
+          supported_types: [
+            provider.supports_ebooks? ? "ebook" : nil,
+            provider.supports_audiobooks? ? "audiobook" : nil,
+            provider.supports_comicbooks? ? "comicbook" : nil
+          ].compact,
+          description: "Custom external acquisition provider"
+        }
+      end
+
+      sources
+    end
+
+    def metadata_sources_payload
+      priority = SettingsService.get(:metadata_provider_priority).to_s.split(",").map(&:strip)
+      statuses = MetadataProviderStatus.all.index_by(&:provider)
+
+      all_providers = [
+        {
+          id: "openlibrary",
+          name: "Open Library",
+          url: "https://openlibrary.org",
+          id_prefix: "openlibrary:",
+          description: "Internet Archive's Open Library open book catalog"
+        },
+        {
+          id: "google_books",
+          name: "Google Books",
+          url: "https://books.google.com",
+          id_prefix: "google_books:",
+          description: "Google Books API with descriptions, previews and ratings"
+        },
+        {
+          id: "hardcover",
+          name: "Hardcover",
+          url: "https://hardcover.app",
+          id_prefix: "hardcover:",
+          description: "Hardcover social book database with community ratings and editions"
+        },
+        {
+          id: "comic_vine",
+          name: "Comic Vine",
+          url: "https://comicvine.gamespot.com",
+          id_prefix: "comic_vine:",
+          description: "Comic book database for issues and graphic novels"
+        }
+      ]
+
+      all_providers.map do |p|
+        status_rec = statuses[p[:id]]
+        p.merge(
+          status: status_rec&.status || "unknown",
+          rate_limited: status_rec&.status == "rate_limited",
+          priority_rank: priority.index(p[:id])
+        )
+      end.sort_by { |p| p[:priority_rank] || 999 }
+    end
+
+    def store_providers_payload
+      StoreProviderRegistry::PROVIDERS.map do |provider|
+        {
+          key: provider.key,
+          name: provider.name,
+          configured: provider.client.configured?,
+          supported_types: provider.book_types,
+          market: provider.market
+        }
+      end
     end
   end
 end
@@ -206,4 +414,5 @@ Rails.application.routes.append do
   get "/api/v1/requests/:id/artifact", to: "api/v1/bookorbit_deliveries#show"
   post "/api/v1/requests/:id/retry_owned", to: "api/v1/bookorbit_deliveries#retry_owned"
   get "/api/v1/book_research", to: "api/v1/bookorbit_research#show"
+  get "/api/v1/sources", to: "api/v1/bookorbit_sources#index"
 end

@@ -26,6 +26,12 @@ type Job = {
   collectionAdded?: boolean;
   allowUnverifiedMetadata?: boolean;
   verification?: { metadataMatch: string; editionVerified: boolean };
+  source?: string;
+  sourceName?: string;
+  indexer?: string;
+  protocol?: string;
+  format?: string;
+  releaseTitle?: string;
 };
 const digest = (v: unknown) =>
   createHash("sha256")
@@ -162,6 +168,18 @@ export class ProcurementService {
     await rename(tmp, target);
   }
 
+  async sources() {
+    const raw = await this.json("/api/v1/sources");
+    return {
+      acquisitionSources: raw.acquisition_sources,
+      metadataSources: raw.metadata_sources,
+      storeProviders: raw.store_providers,
+      downloadPreferences: raw.download_preferences,
+      discernmentNote:
+        "Acquisition sources indicate where book releases/files can be obtained (e.g. Project Gutenberg for public domain ebooks, shadow libraries, or torrent/usenet indexers). Metadata sources provide bibliographic information and ratings.",
+    };
+  }
+
   async discover(query: string, limit: number) {
     const [external, owned] = await Promise.all([
       this.json(
@@ -169,8 +187,17 @@ export class ProcurementService {
       ),
       this.native.searchBooks(query, limit),
     ]);
+    const candidates = external.results ?? [];
+    const distinctSources = Array.from(
+      new Set(
+        candidates
+          .map((c: any) => c.source_name || c.source)
+          .filter(Boolean),
+      ),
+    );
     return {
-      candidates: external.results,
+      candidates,
+      sourcesSummary: distinctSources,
       accessibleCatalogMatches: owned.map((b) => ({
         bookId: b.id,
         title: b.title,
@@ -217,10 +244,19 @@ export class ProcurementService {
       } else for (const value of Object.values(v)) visit(value);
     };
     if (enrichment.status === "fulfilled") visit(enrichment.value);
+    const detailsVal = details.status === "fulfilled" ? details.value : null;
     return {
       workId,
       retrievedAt: new Date().toISOString(),
-      details: details.status === "fulfilled" ? details.value : null,
+      details: detailsVal,
+      sourceProvenance: detailsVal
+        ? {
+            source: detailsVal.source ?? null,
+            sourceName: detailsVal.source_name ?? null,
+            sourceUrl: detailsVal.source_url ?? null,
+            sourceAttribution: detailsVal.source_attribution ?? null,
+          }
+        : null,
       metadataCandidates: candidates,
       providerStatus: { shelfarr: details.status, bookorbit: enrichment.status },
       limitations:
@@ -333,10 +369,75 @@ export class ProcurementService {
       const response = await this.json(
         `/api/v1/requests/${job.requestId}/search_results`,
       );
+      const rawReleases = response.search_results ?? [];
+      const releases = rawReleases.map((r: any) => ({
+        id: r.id,
+        title: r.title,
+        source: r.source,
+        sourceName:
+          r.source_name ||
+          (r.source === "gutenberg"
+            ? "Project Gutenberg"
+            : r.source === "anna_archive"
+              ? "Anna's Archive"
+              : r.source === "zlibrary"
+                ? "Z-Library"
+                : r.indexer || r.source),
+        indexer: r.indexer || null,
+        protocol:
+          r.protocol ||
+          r.download_type ||
+          (["gutenberg", "anna_archive", "zlibrary", "librivox"].includes(r.source)
+            ? "direct"
+            : "torrent"),
+        format: r.format || r.primary_extension || null,
+        detectedExtensions: r.detected_extensions || [],
+        sizeBytes: r.size_bytes ?? null,
+        sizeHuman:
+          r.size_human ??
+          (r.size_bytes
+            ? `${Math.round((r.size_bytes / (1024 * 1024)) * 10) / 10} MB`
+            : null),
+        confidenceScore: r.confidence_score ?? null,
+        confidenceLevel:
+          r.confidence_level ??
+          (r.confidence_score >= 90
+            ? "high"
+            : r.confidence_score >= 70
+              ? "medium"
+              : "low"),
+        detectedLanguage: r.detected_language ?? null,
+        languageName: r.language_name ?? null,
+        infoUrl: r.info_url || null,
+        status: r.status,
+        downloadable: r.downloadable,
+        blocklisted: r.blocklisted,
+        blocklistReason: r.blocklist_reason || null,
+      }));
+      if (selectedResultId) {
+        const selected = releases.find((r: any) => r.id === selectedResultId);
+        if (selected) {
+          job.source = selected.source;
+          job.sourceName = selected.sourceName;
+          job.indexer = selected.indexer;
+          job.protocol = selected.protocol;
+          job.format = selected.format;
+          job.releaseTitle = selected.title;
+          await this.save(jobs);
+        }
+      }
+      const sourcesSummary = Array.from(
+        new Set(
+          releases.map(
+            (r: any) => `${r.sourceName}${r.protocol ? ` (${r.protocol})` : ""}`,
+          ),
+        ),
+      );
       // Native API omits credentialed artifact URLs; never surface filesystem paths.
       return {
         jobId,
-        releases: response.search_results,
+        releases,
+        sourcesSummary,
         storeOffers: response.store_offers,
         checkout: "External seller only; no purchase performed",
       };
@@ -397,6 +498,14 @@ export class ProcurementService {
             job.requestId = matches[0].id;
           }
           const remote = await this.remote(job);
+          if (remote.selected_release) {
+            job.source = remote.selected_release.source;
+            job.sourceName = remote.selected_release.source_name;
+            job.indexer = remote.selected_release.indexer;
+            job.protocol = remote.selected_release.protocol;
+            job.format = remote.selected_release.format;
+            job.releaseTitle = remote.selected_release.title;
+          }
           if (action === "retry_search") {
             if (job.bookId)
               throw new Error(
@@ -516,10 +625,20 @@ export function registerProcurementTools(server: McpServer, native: BookOrbitCli
     }
   };
   server.registerTool(
+    "get_procurement_sources",
+    {
+      description:
+        "Inspect configured and available acquisition sources (e.g. Project Gutenberg, Anna's Archive, Z-Library, torrent/usenet indexers), metadata providers (Open Library, Google Books, Hardcover), and commercial store offers. Discerns source types (direct HTTP, torrent, usenet), supported media (ebook, audiobook), and current provider health/status.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    async () => guard(() => service.sources()),
+  );
+  server.registerTool(
     "discover_books",
     {
       description:
-        "Discover external books through Shelfarr and check only your accessible BookOrbit catalog. Translate conceptual questions into candidate title/author/subject searches. Not a full-text search of external books.",
+        "Discover external books through Shelfarr and check only your accessible BookOrbit catalog. Candidate results identify metadata source provenance (e.g. Open Library, Google Books, Hardcover). Translate conceptual questions into candidate searches; not a full-text search of external books.",
       inputSchema: {
         query: z.string().trim().min(1).max(500),
         limit: z.number().int().min(1).max(20).default(10),
@@ -532,7 +651,7 @@ export function registerProcurementTools(server: McpServer, native: BookOrbitCli
     "research_book",
     {
       description:
-        "Research a selected external work using Shelfarr descriptions and configured BookOrbit metadata providers (including ratings where available). Returns source URLs and explicit gaps; no individual review-text feed or purchase. Use client web research for comments. Confirm edition/author before acquisition.",
+        "Research a selected external work using Shelfarr descriptions and configured BookOrbit metadata providers (including ratings where available). Returns source URLs, metadata provenance and explicit gaps; no individual review-text feed or purchase. Use client web research for comments. Confirm edition/author before acquisition.",
       inputSchema: {
         workId: workIdSchema,
         title: z.string().min(1).max(500),
@@ -578,7 +697,7 @@ export function registerProcurementTools(server: McpServer, native: BookOrbitCli
     "find_book_releases",
     {
       description:
-        "Inspect source releases and separate purchase offers for your own procurement job. Optionally select resultId to start that release; otherwise read-only. Current destination access checked. No source credentials or download URLs exposed.",
+        "Inspect available releases and separate purchase offers for an acquisition job. Discerns source provenance for each release: acquisition source/provider (e.g. Project Gutenberg, Anna's Archive, Z-Library, torrent trackers), protocol (direct HTTP, torrent, usenet), file format (epub, pdf), size, quality score, and seeders. Optionally select resultId to start downloading that release. Current destination access checked. No source credentials or private URLs exposed.",
       inputSchema: {
         jobId: z.string().uuid(),
         resultId: z.number().int().positive().optional(),
@@ -591,7 +710,7 @@ export function registerProcurementTools(server: McpServer, native: BookOrbitCli
     "procurement_status",
     {
       description:
-        "Track your own acquisition jobs and import completed EPUB/PDFs into their recorded authorized library. Background worker also imports. cancel stops a pending request, never deletes imported books; retry_search retries an eligible owned source search after failure. reconcile_import with bookId attaches an existing native book only if destination and artifact hash match an uncertain upload; no blind upload retry. Index readiness is separate in get_index_status.",
+        "Track acquisition jobs and import completed EPUB/PDFs into their recorded authorized library. Reports acquisition source provenance (provider, protocol, format, release title) for selected and completed releases. cancel stops a pending request; retry_search retries an eligible owned source search after failure; reconcile_import with bookId attaches an existing native book only if destination and artifact hash match an uncertain upload. Index readiness is separate in get_index_status.",
       inputSchema: {
         jobId: z.string().uuid().optional(),
         action: z
